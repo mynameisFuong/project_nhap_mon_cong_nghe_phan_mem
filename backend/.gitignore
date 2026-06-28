@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+uploads/*
+!uploads/.gitkeep
+!uploads/leave-evidence/.gitkeep
+!uploads/imports/.gitkeep
+coverage

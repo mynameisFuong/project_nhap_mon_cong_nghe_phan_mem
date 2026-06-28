@@ -1,0 +1,310 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+}
+
+enum SectionStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum SessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT_EXCUSED
+  ABSENT_UNEXCUSED
+}
+
+enum AttendanceMethod {
+  QR_OTP
+  MANUAL
+  SYSTEM
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id                 String        @id @default(uuid()) @db.Uuid
+  email              String        @unique
+  passwordHash       String        @map("password_hash")
+  fullName           String        @map("full_name")
+  role               Role
+  status             AccountStatus @default(ACTIVE)
+  studentCode        String?       @unique @map("student_code")
+  teacherCode        String?       @unique @map("teacher_code")
+  classId            String?       @map("class_id") @db.Uuid
+  currentSessionId   String?       @map("current_session_id")
+  refreshTokenHash   String?       @map("refresh_token_hash")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  class              Class?        @relation(fields: [classId], references: [id])
+  taughtSections     CourseSection[] @relation("TeacherSections")
+  enrollments        Enrollment[]  @relation("StudentEnrollments")
+  attendanceRecords  AttendanceRecord[] @relation("StudentAttendanceRecords")
+  manualRecords      AttendanceRecord[] @relation("MarkedByRecords")
+  leaveRequests      LeaveRequest[] @relation("StudentLeaveRequests")
+  reviewedLeaves     LeaveRequest[] @relation("ReviewedLeaveRequests")
+  notifications      Notification[]
+  importLogs         ImportLog[]
+  auditLogs          AuditLog[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Faculty {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  code        String   @unique
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  classes     Class[]
+  subjects    Subject[]
+
+  @@map("faculties")
+}
+
+model Class {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  code        String   @unique
+  facultyId   String   @map("faculty_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  faculty     Faculty  @relation(fields: [facultyId], references: [id])
+  students    User[]
+
+  @@unique([facultyId, name])
+  @@index([facultyId])
+  @@map("classes")
+}
+
+model Subject {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  credits     Int      @default(3)
+  facultyId   String   @map("faculty_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  faculty     Faculty  @relation(fields: [facultyId], references: [id])
+  sections    CourseSection[]
+
+  @@unique([facultyId, name])
+  @@index([facultyId])
+  @@map("subjects")
+}
+
+model Semester {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  startDate   DateTime @map("start_date") @db.Date
+  endDate     DateTime @map("end_date") @db.Date
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  sections    CourseSection[]
+
+  @@map("semesters")
+}
+
+model CourseSection {
+  id          String        @id @default(uuid()) @db.Uuid
+  code        String        @unique
+  subjectId   String        @map("subject_id") @db.Uuid
+  semesterId  String        @map("semester_id") @db.Uuid
+  teacherId   String        @map("teacher_id") @db.Uuid
+  status      SectionStatus @default(ACTIVE)
+  absenceThresholdPercent Decimal @default(20) @map("absence_threshold_percent") @db.Decimal(5, 2)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  subject     Subject       @relation(fields: [subjectId], references: [id])
+  semester    Semester      @relation(fields: [semesterId], references: [id])
+  teacher     User          @relation("TeacherSections", fields: [teacherId], references: [id])
+  enrollments Enrollment[]
+  lessons     Lesson[]
+  sessions    AttendanceSession[]
+  importLogs  ImportLog[]
+
+  @@unique([subjectId, semesterId, teacherId, code])
+  @@index([teacherId])
+  @@index([semesterId])
+  @@map("course_sections")
+}
+
+model Enrollment {
+  id              String        @id @default(uuid()) @db.Uuid
+  courseSectionId String        @map("course_section_id") @db.Uuid
+  studentId       String        @map("student_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  courseSection   CourseSection @relation(fields: [courseSectionId], references: [id], onDelete: Cascade)
+  student         User          @relation("StudentEnrollments", fields: [studentId], references: [id])
+
+  @@unique([courseSectionId, studentId])
+  @@index([studentId])
+  @@map("enrollments")
+}
+
+model Lesson {
+  id              String        @id @default(uuid()) @db.Uuid
+  courseSectionId String        @map("course_section_id") @db.Uuid
+  lessonDate      DateTime      @map("lesson_date") @db.Date
+  startTime       String        @map("start_time")
+  endTime         String        @map("end_time")
+  room            String?
+  topic           String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  courseSection   CourseSection @relation(fields: [courseSectionId], references: [id], onDelete: Cascade)
+  sessions        AttendanceSession[]
+
+  @@unique([courseSectionId, lessonDate, startTime])
+  @@index([courseSectionId, lessonDate])
+  @@map("lessons")
+}
+
+model AttendanceSession {
+  id              String        @id @default(uuid()) @db.Uuid
+  courseSectionId String        @map("course_section_id") @db.Uuid
+  lessonId        String        @map("lesson_id") @db.Uuid
+  status          SessionStatus @default(OPEN)
+  nonce           String
+  openedAt        DateTime      @default(now()) @map("opened_at")
+  closedAt        DateTime?     @map("closed_at")
+  createdById     String        @map("created_by_id") @db.Uuid
+
+  courseSection   CourseSection @relation(fields: [courseSectionId], references: [id], onDelete: Cascade)
+  lesson          Lesson        @relation(fields: [lessonId], references: [id])
+  records         AttendanceRecord[]
+  leaveRequests   LeaveRequest[]
+
+  @@unique([lessonId])
+  @@index([courseSectionId, status])
+  @@map("attendance_sessions")
+}
+
+model AttendanceRecord {
+  id                  String           @id @default(uuid()) @db.Uuid
+  attendanceSessionId String           @map("attendance_session_id") @db.Uuid
+  studentId           String           @map("student_id") @db.Uuid
+  status              AttendanceStatus
+  method              AttendanceMethod
+  markedAt            DateTime         @default(now()) @map("marked_at")
+  markedById          String?          @map("marked_by_id") @db.Uuid
+  reason              String?
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  attendanceSession   AttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
+  student             User              @relation("StudentAttendanceRecords", fields: [studentId], references: [id])
+  markedBy            User?             @relation("MarkedByRecords", fields: [markedById], references: [id])
+  leaveRequest        LeaveRequest?
+
+  @@unique([attendanceSessionId, studentId])
+  @@index([studentId])
+  @@index([status])
+  @@map("attendance_records")
+}
+
+model LeaveRequest {
+  id                  String             @id @default(uuid()) @db.Uuid
+  attendanceSessionId String             @map("attendance_session_id") @db.Uuid
+  attendanceRecordId  String?            @unique @map("attendance_record_id") @db.Uuid
+  studentId           String             @map("student_id") @db.Uuid
+  reason              String
+  evidencePath        String             @map("evidence_path")
+  status              LeaveRequestStatus @default(PENDING)
+  reviewedById        String?            @map("reviewed_by_id") @db.Uuid
+  reviewedAt          DateTime?          @map("reviewed_at")
+  reviewNote          String?            @map("review_note")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+
+  attendanceSession   AttendanceSession  @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
+  attendanceRecord    AttendanceRecord?  @relation(fields: [attendanceRecordId], references: [id])
+  student             User               @relation("StudentLeaveRequests", fields: [studentId], references: [id])
+  reviewedBy          User?              @relation("ReviewedLeaveRequests", fields: [reviewedById], references: [id])
+
+  @@index([studentId, status])
+  @@index([attendanceSessionId])
+  @@map("leave_requests")
+}
+
+model Notification {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  title       String
+  message     String
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model ImportLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  courseSectionId String?  @map("course_section_id") @db.Uuid
+  importedById    String   @map("imported_by_id") @db.Uuid
+  fileName        String   @map("file_name")
+  totalRows       Int      @map("total_rows")
+  successRows     Int      @map("success_rows")
+  failedRows      Int      @map("failed_rows")
+  errorDetails    Json?    @map("error_details")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  courseSection   CourseSection? @relation(fields: [courseSectionId], references: [id])
+  importedBy      User     @relation(fields: [importedById], references: [id])
+
+  @@index([courseSectionId])
+  @@map("import_logs")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorId     String?  @map("actor_id") @db.Uuid
+  action      String
+  entity      String
+  entityId    String?  @map("entity_id")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor       User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
