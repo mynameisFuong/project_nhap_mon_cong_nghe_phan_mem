@@ -433,8 +433,12 @@ export const updateRecordStatus = asyncHandler(async (req, res) => {
 
 export const listLeaveRequests = asyncHandler(async (req, res) => {
   ok(res, await prisma.leaveRequest.findMany({
-    where: { attendanceSession: { courseSection: { teacherId: req.user!.id } } },
-    include: { student: { select: { id: true, fullName: true, studentCode: true } }, attendanceSession: { include: { lesson: true, courseSection: true } } },
+    where: { lesson: { courseSection: { teacherId: req.user!.id } } },
+    include: {
+      student: { select: { id: true, fullName: true, studentCode: true } },
+      lesson: { include: { courseSection: { include: { subject: true } } } },
+      attendanceSession: { include: { lesson: true, courseSection: { include: { subject: true } } } }
+    },
     orderBy: { createdAt: "desc" }
   }));
 });
@@ -465,8 +469,11 @@ export const markNotificationRead = asyncHandler(async (req, res) => {
 
 export const reviewLeaveRequest = asyncHandler(async (req, res) => {
   const input = z.object({ status: z.enum(["APPROVED", "REJECTED"]), reviewNote: z.string().optional() }).parse(req.body);
-  const leave = await prisma.leaveRequest.findUniqueOrThrow({ where: { id: req.params.id }, include: { attendanceSession: true } });
-  await ensureTeacherOwnsSection(req.user!.id, leave.attendanceSession.courseSectionId);
+  const leave = await prisma.leaveRequest.findUniqueOrThrow({
+    where: { id: req.params.id },
+    include: { attendanceSession: true, lesson: true }
+  });
+  await ensureTeacherOwnsSection(req.user!.id, leave.lesson.courseSectionId);
   if (leave.status !== "PENDING") throw new AppError(409, "LEAVE_ALREADY_REVIEWED", "Don xin phep da duoc xu ly.");
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -474,12 +481,46 @@ export const reviewLeaveRequest = asyncHandler(async (req, res) => {
       where: { id: leave.id },
       data: { status: input.status, reviewNote: input.reviewNote, reviewedById: req.user!.id, reviewedAt: new Date() }
     });
-    await tx.attendanceRecord.updateMany({
-      where: { attendanceSessionId: leave.attendanceSessionId, studentId: leave.studentId },
-      data: input.status === "APPROVED"
-        ? { status: "ABSENT_EXCUSED", reason: "Don xin phep da duoc duyet." }
-        : { status: "ABSENT_UNEXCUSED", reason: input.reviewNote || "Don xin phep bi tu choi." }
+    const session = leave.attendanceSession ?? await tx.attendanceSession.findFirst({
+      where: { lessonId: leave.lessonId },
+      orderBy: { openedAt: "desc" }
     });
+    if (session) {
+      if (input.status === "APPROVED") {
+        const existingRecord = await tx.attendanceRecord.findUnique({
+          where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: leave.studentId } }
+        });
+        const record = existingRecord
+          ? existingRecord.status === "ABSENT_UNEXCUSED"
+            ? await tx.attendanceRecord.update({
+              where: { id: existingRecord.id },
+              data: { status: "ABSENT_EXCUSED", reason: "Don xin phep da duoc duyet.", method: "SYSTEM" }
+            })
+            : existingRecord
+          : await tx.attendanceRecord.create({
+            data: {
+            attendanceSessionId: session.id,
+            studentId: leave.studentId,
+            status: "ABSENT_EXCUSED",
+            method: "SYSTEM",
+            reason: "Don xin phep da duoc duyet."
+          }
+        });
+        await tx.leaveRequest.update({
+          where: { id: leave.id },
+          data: { attendanceSessionId: session.id, attendanceRecordId: record.id }
+        });
+      } else {
+        await tx.attendanceRecord.updateMany({
+          where: { attendanceSessionId: session.id, studentId: leave.studentId },
+          data: { status: "ABSENT_UNEXCUSED", reason: input.reviewNote || "Don xin phep bi tu choi." }
+        });
+        await tx.leaveRequest.update({
+          where: { id: leave.id },
+          data: { attendanceSessionId: session.id }
+        });
+      }
+    }
     await tx.notification.create({
       data: {
         userId: leave.studentId,

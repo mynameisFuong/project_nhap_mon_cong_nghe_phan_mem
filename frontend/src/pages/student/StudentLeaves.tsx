@@ -16,56 +16,85 @@ import { shortDate } from "../../utils/format";
 const leaveTone = { PENDING: "warning", APPROVED: "success", REJECTED: "danger" } as const;
 const leaveText = { PENDING: "Chờ duyệt", APPROVED: "Đã duyệt", REJECTED: "Từ chối" };
 
+const lessonLabel = (lesson?: { lessonDate?: string; startTime?: string; courseSection?: { code?: string; subject?: { name?: string } } }) =>
+  `${shortDate(lesson?.lessonDate)} ${lesson?.startTime ?? ""} - ${lesson?.courseSection?.code ?? ""} - ${lesson?.courseSection?.subject?.name ?? "Học phần"}`;
+
 export function StudentLeaves() {
   const history = useAsync(studentService.history, []);
+  const schedule = useAsync(studentService.schedule, []);
   const leaves = useAsync(studentService.leaveRequests, []);
   const { showToast } = useToast();
-  const [attendanceRecordId, setAttendanceRecordId] = useState("");
+  const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
+  const activeLeaveLessonIds = useMemo(
+    () => new Set((leaves.data ?? [])
+      .filter((leave) => leave.status !== "REJECTED")
+      .map((leave) => leave.lessonId ?? leave.lesson?.id ?? leave.attendanceSession?.lessonId)
+      .filter(Boolean)),
+    [leaves.data]
+  );
+
+  const upcomingLessons = useMemo(
+    () => (schedule.data ?? []).filter((lesson) => {
+      const start = new Date(`${lesson.lessonDate}T${lesson.startTime}:00+07:00`);
+      return start.getTime() > Date.now() && !activeLeaveLessonIds.has(lesson.id);
+    }),
+    [activeLeaveLessonIds, schedule.data]
+  );
+
   const absentRecords = useMemo(
-    () => {
-      const blockedRecordIds = new Set((leaves.data ?? [])
-        .filter((leave) => leave.status !== "REJECTED" && leave.attendanceRecordId)
-        .map((leave) => leave.attendanceRecordId));
-      return (history.data ?? []).filter((record) =>
-        record.status === "ABSENT_UNEXCUSED"
-        && record.attendanceSession?.id
-        && !blockedRecordIds.has(record.id)
-      );
-    },
-    [history.data, leaves.data]
+    () => (history.data ?? []).filter((record) =>
+      record.status === "ABSENT_UNEXCUSED"
+      && record.attendanceSession?.id
+      && !activeLeaveLessonIds.has(record.attendanceSession.lessonId)
+    ),
+    [activeLeaveLessonIds, history.data]
   );
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!attendanceRecordId || !reason || !file) return showToast("Vui lòng chọn buổi vắng, nhập lý do và chọn file minh chứng.", "error");
+    if (!target || !reason || !file) return showToast("Vui lòng chọn buổi học, nhập lý do và chọn file minh chứng.", "error");
+    const [kind, id] = target.split(":");
     try {
-      await studentService.createLeave(attendanceRecordId, reason, file);
+      await studentService.createLeave(kind === "lesson" ? { lessonId: id } : { attendanceRecordId: id }, reason, file);
       showToast("Đã gửi đơn xin phép.", "success");
-      setAttendanceRecordId("");
+      setTarget("");
       setReason("");
       setFile(null);
-      await leaves.reload();
+      await Promise.all([leaves.reload(), history.reload(), schedule.reload()]);
     } catch (err) {
       showToast(getErrorMessage(err), "error");
     }
   };
 
-  if (history.loading || leaves.loading) return <LoadingSpinner />;
+  if (history.loading || schedule.loading || leaves.loading) return <LoadingSpinner />;
 
   return (
     <div className="page-stack">
-      <PageHeader title="Đơn xin phép" description="Gửi đơn cho các buổi đã bị đánh dấu vắng, bắt buộc có lý do và minh chứng." />
+      <PageHeader title="Đơn xin phép" description="Gửi đơn trước buổi học theo lịch học hoặc gửi bổ sung cho buổi đã bị đánh dấu vắng không phép." />
       <section className="panel">
         <form className="form-grid" onSubmit={submit}>
-          <Select label="Buổi vắng" value={attendanceRecordId} onChange={(e) => setAttendanceRecordId(e.target.value)}>
-            <option value="">Chọn buổi vắng</option>
-            {absentRecords.map((record) => <option key={record.id} value={record.id}>{shortDate(record.attendanceSession?.lesson?.lessonDate)} - {record.attendanceSession?.courseSection?.subject?.name}</option>)}
+          <Select label="Buổi học / buổi vắng" value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">Chọn buổi học hoặc buổi vắng</option>
+            {upcomingLessons.length > 0 && <option disabled>-- Xin phép trước buổi học --</option>}
+            {upcomingLessons.map((lesson) => (
+              <option key={lesson.id} value={`lesson:${lesson.id}`}>{lessonLabel(lesson)}</option>
+            ))}
+            {absentRecords.length > 0 && <option disabled>-- Xin phép sau khi đã vắng --</option>}
+            {absentRecords.map((record) => (
+              <option key={record.id} value={`record:${record.id}`}>
+                {lessonLabel(record.attendanceSession?.lesson)} - {record.attendanceSession?.courseSection?.subject?.name ?? ""}
+              </option>
+            ))}
           </Select>
           <Textarea label="Lý do" value={reason} onChange={(e) => setReason(e.target.value)} />
-          <label className="dropzone compact"><Upload size={22} /><span>{file ? file.name : "Chọn ảnh/PDF minh chứng"}</span><input type="file" accept=".png,.jpg,.jpeg,.pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
+          <label className="dropzone compact">
+            <Upload size={22} />
+            <span>{file ? file.name : "Chọn ảnh/PDF minh chứng"}</span>
+            <input type="file" accept=".png,.jpg,.jpeg,.pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </label>
           <div className="full-span"><Button>Gửi đơn xin phép</Button></div>
         </form>
       </section>
@@ -73,6 +102,7 @@ export function StudentLeaves() {
         <div className="panel-head"><h2>Đơn đã gửi</h2></div>
         <DataTable data={leaves.data ?? []} columns={[
           { key: "date", header: "Ngày gửi", render: (row) => shortDate(row.createdAt) },
+          { key: "lesson", header: "Buổi học", render: (row) => lessonLabel(row.lesson ?? row.attendanceSession?.lesson) },
           { key: "reason", header: "Lý do", render: (row) => row.reason },
           { key: "status", header: "Trạng thái", render: (row) => <Badge tone={leaveTone[row.status]}>{leaveText[row.status]}</Badge> },
           { key: "note", header: "Ghi chú GV", render: (row) => row.reviewNote ?? "-" }

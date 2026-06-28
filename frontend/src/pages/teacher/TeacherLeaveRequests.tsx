@@ -36,6 +36,11 @@ const evidenceKind = (path?: string | null) => {
   return "file";
 };
 
+const leaveLesson = (leave?: LeaveRequest | null) => leave?.lesson ?? leave?.attendanceSession?.lesson;
+const leaveSection = (leave?: LeaveRequest | null) => leave?.lesson?.courseSection ?? leave?.attendanceSession?.courseSection;
+const leaveLessonText = (leave?: LeaveRequest | null) =>
+  `${shortDate(leaveLesson(leave)?.lessonDate)} - ${leaveSection(leave)?.code ?? ""} - ${leaveSection(leave)?.subject?.name ?? "Học phần"}`;
+
 export function TeacherLeaveRequests() {
   const { data, loading, reload } = useAsync(teacherService.leaveRequests, []);
   const { showToast } = useToast();
@@ -67,11 +72,17 @@ export function TeacherLeaveRequests() {
       <PageHeader title="Đơn xin phép" description="Xem minh chứng, duyệt hoặc từ chối đơn xin nghỉ học của sinh viên." />
       <section className="panel">
         <div className="toolbar">
-          <select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="ALL">Tất cả</option><option value="PENDING">Chờ duyệt</option><option value="APPROVED">Đã duyệt</option><option value="REJECTED">Từ chối</option></select>
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="ALL">Tất cả</option>
+            <option value="PENDING">Chờ duyệt</option>
+            <option value="APPROVED">Đã duyệt</option>
+            <option value="REJECTED">Từ chối</option>
+          </select>
         </div>
         <DataTable data={rows} columns={[
           { key: "student", header: "Sinh viên", render: (row) => <strong>{row.student?.fullName ?? "-"}</strong> },
           { key: "code", header: "MSSV", render: (row) => row.student?.studentCode ?? "-" },
+          { key: "lesson", header: "Buổi học", render: (row) => leaveLessonText(row) },
           { key: "date", header: "Ngày gửi", render: (row) => shortDate(row.createdAt) },
           { key: "reason", header: "Lý do", render: (row) => row.reason },
           { key: "status", header: "Trạng thái", render: (row) => <Badge tone={leaveTone[row.status]}>{leaveText[row.status]}</Badge> },
@@ -81,6 +92,7 @@ export function TeacherLeaveRequests() {
       <Modal open={Boolean(selected)} title="Chi tiết đơn xin phép" onClose={() => setSelected(null)}>
         <div className="detail-list">
           <p><strong>Sinh viên:</strong> {selected?.student?.fullName}</p>
+          <p><strong>Buổi học:</strong> {leaveLessonText(selected)}</p>
           <p><strong>Lý do:</strong> {selected?.reason}</p>
           <div className="evidence-block">
             <strong>Minh chứng:</strong>

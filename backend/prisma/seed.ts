@@ -190,6 +190,7 @@ async function main() {
     where: { attendanceRecordId: absentRecord.id },
     update: {},
     create: {
+      lessonId: lesson1.id,
       attendanceSessionId: session.id,
       attendanceRecordId: absentRecord.id,
       studentId: students[6].id,

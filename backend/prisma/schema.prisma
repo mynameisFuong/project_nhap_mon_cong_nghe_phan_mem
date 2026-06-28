@@ -188,6 +188,7 @@ model Lesson {
 
   courseSection   CourseSection @relation(fields: [courseSectionId], references: [id], onDelete: Cascade)
   sessions        AttendanceSession[]
+  leaveRequests   LeaveRequest[]
 
   @@unique([courseSectionId, lessonDate, startTime])
   @@index([courseSectionId, lessonDate])
@@ -239,7 +240,8 @@ model AttendanceRecord {
 
 model LeaveRequest {
   id                  String             @id @default(uuid()) @db.Uuid
-  attendanceSessionId String             @map("attendance_session_id") @db.Uuid
+  lessonId            String             @map("lesson_id") @db.Uuid
+  attendanceSessionId String?            @map("attendance_session_id") @db.Uuid
   attendanceRecordId  String?            @unique @map("attendance_record_id") @db.Uuid
   studentId           String             @map("student_id") @db.Uuid
   reason              String
@@ -251,13 +253,16 @@ model LeaveRequest {
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
 
-  attendanceSession   AttendanceSession  @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
+  lesson              Lesson             @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  attendanceSession   AttendanceSession? @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
   attendanceRecord    AttendanceRecord?  @relation(fields: [attendanceRecordId], references: [id])
   student             User               @relation("StudentLeaveRequests", fields: [studentId], references: [id])
   reviewedBy          User?              @relation("ReviewedLeaveRequests", fields: [reviewedById], references: [id])
 
   @@index([studentId, status])
+  @@index([lessonId])
   @@index([attendanceSessionId])
+  @@unique([lessonId, studentId])
   @@map("leave_requests")
 }
 

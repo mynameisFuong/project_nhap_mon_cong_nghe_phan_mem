@@ -8,9 +8,10 @@ export const studentService = {
   submitAttendance: (qrToken: string, otp: string) => unwrap(apiClient.post("/student/attendance", { qrToken, otp })),
   history: () => USE_MOCK ? Promise.resolve(mockRecords) : unwrap<AttendanceRecord[]>(apiClient.get("/student/attendance/history")),
   leaveRequests: () => USE_MOCK ? Promise.resolve(mockLeaves) : unwrap<LeaveRequest[]>(apiClient.get("/student/leave-requests")),
-  createLeave: (attendanceRecordId: string, reason: string, evidence: File) => {
+  createLeave: (payload: { attendanceRecordId?: string; lessonId?: string }, reason: string, evidence: File) => {
     const data = new FormData();
-    data.append("attendanceRecordId", attendanceRecordId);
+    if (payload.attendanceRecordId) data.append("attendanceRecordId", payload.attendanceRecordId);
+    if (payload.lessonId) data.append("lessonId", payload.lessonId);
     data.append("reason", reason);
     data.append("evidence", evidence);
     return unwrap(apiClient.post("/student/leave-requests", data));

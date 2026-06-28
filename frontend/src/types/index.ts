@@ -108,6 +108,8 @@ export type TeacherSectionReport = {
 
 export type LeaveRequest = {
   id: string;
+  lessonId?: string;
+  attendanceSessionId?: string | null;
   attendanceRecordId?: string | null;
   reason: string;
   evidencePath: string;
@@ -117,6 +119,9 @@ export type LeaveRequest = {
   student?: User;
   attendanceSession?: AttendanceSession & {
     lesson?: Lesson;
+    courseSection?: CourseSection;
+  };
+  lesson?: Lesson & {
     courseSection?: CourseSection;
   };
 };

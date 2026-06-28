@@ -92,17 +92,30 @@ export const closeSessionAndMarkAbsent = async (sessionId: string) => {
 
   await prisma.$transaction(async (tx) => {
     for (const enrollment of enrollments) {
-      await tx.attendanceRecord.upsert({
-        where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: enrollment.studentId } },
-        update: {},
-        create: {
+      const existingRecord = await tx.attendanceRecord.findUnique({
+        where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: enrollment.studentId } }
+      });
+      if (existingRecord) continue;
+
+      const approvedLeave = await tx.leaveRequest.findUnique({
+        where: { lessonId_studentId: { lessonId: session.lessonId, studentId: enrollment.studentId } }
+      });
+      const isExcused = approvedLeave?.status === "APPROVED";
+      const record = await tx.attendanceRecord.create({
+        data: {
           attendanceSessionId: session.id,
           studentId: enrollment.studentId,
-          status: "ABSENT_UNEXCUSED",
+          status: isExcused ? "ABSENT_EXCUSED" : "ABSENT_UNEXCUSED",
           method: "SYSTEM",
-          reason: "Tự động đánh vắng khi kết thúc phiên."
+          reason: isExcused ? "Don xin phep da duoc duyet truoc buoi hoc." : "Tu dong danh vang khi ket thuc phien."
         }
       });
+      if (approvedLeave) {
+        await tx.leaveRequest.update({
+          where: { id: approvedLeave.id },
+          data: { attendanceSessionId: session.id, attendanceRecordId: record.id }
+        });
+      }
     }
     await tx.attendanceSession.update({ where: { id: session.id }, data: { status: "CLOSED", closedAt: new Date() } });
   });
