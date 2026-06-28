@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
-import { ChevronLeft, ChevronRight, Download, Eye, FileUp, Plus, Search, Trash2 } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Download, Eye, FileUp, Plus, Search, Trash2 } from "lucide-react";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -12,7 +12,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { useToast } from "../../context/ToastContext";
 import { adminService } from "../../services";
 import { apiClient, getErrorMessage, unwrap } from "../../services/apiClient";
-import type { CourseSection, StudentInSection } from "../../types";
+import type { CourseSection, Lesson, StudentInSection } from "../../types";
 import { useAsync } from "../../utils/useAsync";
 
 const emptySectionForm = {
@@ -33,6 +33,12 @@ export function SectionManagement() {
   const [deleteTarget, setDeleteTarget] = useState<CourseSection | null>(null);
   const [students, setStudents] = useState<StudentInSection[]>([]);
   const [studentsLoading, setStudentsLoading] = useState(false);
+  const [lessonSection, setLessonSection] = useState<CourseSection | null>(null);
+  const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [lessonsLoading, setLessonsLoading] = useState(false);
+  const [lessonFile, setLessonFile] = useState<File | null>(null);
+  const [lessonImporting, setLessonImporting] = useState(false);
+  const [lessonImportErrors, setLessonImportErrors] = useState<Array<{ row: number; message: string }>>([]);
   const [studentQuery, setStudentQuery] = useState("");
   const [studentPage, setStudentPage] = useState(1);
   const [studentPageSize, setStudentPageSize] = useState(10);
@@ -70,6 +76,52 @@ export function SectionManagement() {
       showToast(getErrorMessage(err), "error");
     } finally {
       setStudentsLoading(false);
+    }
+  };
+
+  const openLessons = async (section: CourseSection) => {
+    setLessonSection(section);
+    setLessons([]);
+    setLessonFile(null);
+    setLessonImportErrors([]);
+    setLessonsLoading(true);
+    try {
+      setLessons(await adminService.sectionLessons(section.id));
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    } finally {
+      setLessonsLoading(false);
+    }
+  };
+
+  const reloadLessons = async () => {
+    if (!lessonSection) return;
+    setLessonsLoading(true);
+    try {
+      setLessons(await adminService.sectionLessons(lessonSection.id));
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    } finally {
+      setLessonsLoading(false);
+    }
+  };
+
+  const submitLessonImport = async () => {
+    if (!lessonSection) return;
+    if (!lessonFile) {
+      showToast("Vui lòng chọn file Excel hoặc CSV.", "error");
+      return;
+    }
+    try {
+      setLessonImporting(true);
+      const result = await adminService.importSectionLessons(lessonSection.id, lessonFile);
+      setLessonImportErrors(result.errors ?? []);
+      await Promise.all([reloadLessons(), sections.reload()]);
+      showToast(`Import lịch học hoàn tất: ${result.successRows}/${result.totalRows} dòng thành công.`, result.failedRows ? "info" : "success");
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    } finally {
+      setLessonImporting(false);
     }
   };
 
@@ -169,9 +221,14 @@ export function SectionManagement() {
               key: "actions",
               header: "Thao tác",
               render: (row) => (
-                <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => setDeleteTarget(row)}>
-                  Xóa
-                </Button>
+                <div className="table-actions">
+                  <Button variant="outline" icon={<CalendarDays size={16} />} onClick={() => openLessons(row)}>
+                    Lịch học
+                  </Button>
+                  <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => setDeleteTarget(row)}>
+                    Xóa
+                  </Button>
+                </div>
               )
             }
           ]}
@@ -276,6 +333,55 @@ export function SectionManagement() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+      <Modal
+        open={Boolean(lessonSection)}
+        title={"Lịch học lớp " + (lessonSection?.code ?? "")}
+        onClose={() => setLessonSection(null)}
+        className="modal-wide"
+      >
+        {lessonsLoading ? (
+          <LoadingSpinner />
+        ) : (
+          <div className="page-stack">
+            <div className="upload-guide compact-guide">
+              <p>Admin có thể xem và seed lịch học cho lớp học phần bằng file CSV hoặc Excel.</p>
+              <p>File mẫu hỗ trợ các cột: Lớp học phần, Môn học, Ngày học, Bắt đầu, Kết thúc, Phòng, Giảng viên, Nội dung.</p>
+              <a className="btn btn-outline" href="/templates/import-lich-hoc-mau.csv" download>
+                <Download size={18} />
+                <span>Tải file mẫu CSV</span>
+              </a>
+            </div>
+            <label className="dropzone">
+              <FileUp size={30} />
+              <span>{lessonFile ? lessonFile.name : "Chọn file lịch học .xlsx hoặc .csv"}</span>
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => setLessonFile(event.target.files?.[0] ?? null)} />
+            </label>
+            <div className="modal-actions">
+              <Button type="button" variant="outline" onClick={reloadLessons}>Làm mới</Button>
+              <Button type="button" disabled={lessonImporting} onClick={submitLessonImport}>{lessonImporting ? "Đang import" : "Import lịch học"}</Button>
+            </div>
+            <DataTable
+              data={lessons}
+              emptyTitle="Chưa có lịch học cho lớp học phần này"
+              columns={[
+                { key: "lessonDate", header: "Ngày học", render: (row) => new Date(row.lessonDate).toLocaleDateString("vi-VN") },
+                { key: "time", header: "Giờ học", render: (row) => row.startTime + " - " + row.endTime },
+                { key: "room", header: "Phòng", render: (row) => row.room ?? "-" },
+                { key: "topic", header: "Nội dung", render: (row) => row.topic ?? row.courseSection?.subject?.name ?? lessonSection?.subject?.name ?? "-" },
+                { key: "sessions", header: "Phiên điểm danh", render: (row) => row.sessions?.length ?? (row.session ? 1 : 0) }
+              ]}
+            />
+            <DataTable
+              data={lessonImportErrors}
+              emptyTitle="Chưa có lỗi import lịch học"
+              columns={[
+                { key: "row", header: "Dòng", render: (row) => row.row },
+                { key: "message", header: "Lỗi", render: (row) => row.message }
+              ]}
+            />
           </div>
         )}
       </Modal>

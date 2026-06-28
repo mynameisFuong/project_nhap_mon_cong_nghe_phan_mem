@@ -1,4 +1,4 @@
-import type { ClassRoom, CourseSection, Faculty, Semester, StudentInSection, Subject, User } from "../types";
+import type { ClassRoom, CourseSection, Faculty, Lesson, Semester, StudentInSection, Subject, User } from "../types";
 import { apiClient, unwrap, USE_MOCK } from "./apiClient";
 import { mockClasses, mockFaculties, mockSections, mockSemesters, mockSubjects, mockUsers } from "./mockData";
 
@@ -65,6 +65,16 @@ export const adminService = {
           : []
       )
       : unwrap<StudentInSection[]>(apiClient.get(`/admin/sections/${sectionId}/students`)),
+  sectionLessons: (sectionId: string) =>
+    USE_MOCK ? Promise.resolve([] as Lesson[]) : unwrap<Lesson[]>(apiClient.get(`/admin/sections/${sectionId}/lessons`)),
+  importSectionLessons: (sectionId: string, file: File) => {
+    if (USE_MOCK) return Promise.resolve({ totalRows: 0, successRows: 0, failedRows: 0, errors: [] });
+    const data = new FormData();
+    data.append("file", file);
+    return unwrap<{ totalRows: number; successRows: number; failedRows: number; errors: Array<{ row: number; message: string }> }>(
+      apiClient.post(`/admin/sections/${sectionId}/lessons/import`, data)
+    );
+  },
   overview: () => USE_MOCK ? Promise.resolve({
     summary: { attendancePercent: 91, sessionCount: 3, warningCount: 0 },
     sections: mockSections.map((section) => ({

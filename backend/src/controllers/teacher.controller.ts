@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";
-import { buildQrOtp, closeExpiredSession, closeExpiredSessions, closeSessionAndMarkAbsent, ensureTeacherOwnsSection, isLessonEnded, isLessonStarted, newSessionNonce } from "../services/attendance.service.js";
+import { buildQrOtp, closeExpiredSession, closeExpiredSessions, closeSessionAndMarkAbsent, ensureStudentEnrolled, ensureTeacherOwnsSection, isLessonEnded, isLessonStarted, newSessionNonce } from "../services/attendance.service.js";
 import { asyncHandler, AppError, ok } from "../utils/http.js";
 
 type ExcelCell = string | number | boolean | Date | null;
@@ -114,7 +114,15 @@ export const sectionLessons = asyncHandler(async (req, res) => {
   await closeExpiredSessions(req.params.sectionId);
   const lessons = await prisma.lesson.findMany({
     where: { courseSectionId: req.params.sectionId },
-    include: { sessions: { orderBy: { openedAt: "desc" } } },
+    include: {
+      courseSection: {
+        include: {
+          subject: true,
+          teacher: { select: { id: true, fullName: true, email: true } }
+        }
+      },
+      sessions: { orderBy: { openedAt: "desc" } }
+    },
     orderBy: { lessonDate: "asc" }
   });
   ok(res, lessons.map(attachLatestSession));
@@ -237,10 +245,6 @@ export const createSession = asyncHandler(async (req, res) => {
   await ensureTeacherOwnsSection(req.user!.id, lesson.courseSectionId);
   await closeExpiredSessions();
 
-  if (lesson.sessions.length > 0) {
-    throw new AppError(409, "SESSION_ALREADY_EXISTS", "Buoi hoc nay da co phien diem danh. Neu can diem danh lan 2, hay them mot buoi hoc cung ngay voi khung gio khac.");
-  }
-
   const openSession = await prisma.attendanceSession.findFirst({
     where: {
       status: "OPEN",
@@ -250,11 +254,11 @@ export const createSession = asyncHandler(async (req, res) => {
     orderBy: { openedAt: "desc" }
   });
   if (openSession) {
-    throw new AppError(409, "OPEN_SESSION_EXISTS", `Ban dang co phien diem danh dang mo o lop ${openSession.courseSection.code}, ngay ${openSession.lesson.lessonDate.toISOString().slice(0, 10)} luc ${openSession.lesson.startTime}. Vui long ket thuc phien do truoc.`);
+    throw new AppError(409, "OPEN_SESSION_EXISTS", `Bạn đang có phiên điểm danh đang mở ở lớp ${openSession.courseSection.code}, ngày ${openSession.lesson.lessonDate.toISOString().slice(0, 10)} lúc ${openSession.lesson.startTime}. Vui lòng kết thúc phiên đó trước.`);
   }
 
   if (!isLessonStarted(lesson)) {
-    throw new AppError(422, "LESSON_NOT_STARTED", "Chua den gio bat dau buoi hoc, khong the tao phien diem danh.");
+    throw new AppError(422, "LESSON_NOT_STARTED", "Chưa đến giờ bắt đầu buổi học, không thể tạo phiên điểm danh.");
   }
 
   if (isLessonEnded(lesson)) {
@@ -400,6 +404,7 @@ export const manualMark = asyncHandler(async (req, res) => {
   const session = await prisma.attendanceSession.findUniqueOrThrow({ where: { id: req.params.sessionId } });
   if (session.status !== "OPEN") throw new AppError(400, "SESSION_CLOSED", "Chỉ điểm danh thủ công khi phiên đang mở.");
   await ensureTeacherOwnsSection(req.user!.id, session.courseSectionId);
+  await ensureStudentEnrolled(input.studentId, session.courseSectionId);
 
   const record = await prisma.attendanceRecord.upsert({
     where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: input.studentId } },
@@ -462,18 +467,19 @@ export const reviewLeaveRequest = asyncHandler(async (req, res) => {
   const input = z.object({ status: z.enum(["APPROVED", "REJECTED"]), reviewNote: z.string().optional() }).parse(req.body);
   const leave = await prisma.leaveRequest.findUniqueOrThrow({ where: { id: req.params.id }, include: { attendanceSession: true } });
   await ensureTeacherOwnsSection(req.user!.id, leave.attendanceSession.courseSectionId);
+  if (leave.status !== "PENDING") throw new AppError(409, "LEAVE_ALREADY_REVIEWED", "Don xin phep da duoc xu ly.");
 
   const updated = await prisma.$transaction(async (tx) => {
     const result = await tx.leaveRequest.update({
       where: { id: leave.id },
       data: { status: input.status, reviewNote: input.reviewNote, reviewedById: req.user!.id, reviewedAt: new Date() }
     });
-    if (input.status === "APPROVED") {
-      await tx.attendanceRecord.updateMany({
-        where: { attendanceSessionId: leave.attendanceSessionId, studentId: leave.studentId },
-        data: { status: "ABSENT_EXCUSED", reason: "Đơn xin phép đã được duyệt." }
-      });
-    }
+    await tx.attendanceRecord.updateMany({
+      where: { attendanceSessionId: leave.attendanceSessionId, studentId: leave.studentId },
+      data: input.status === "APPROVED"
+        ? { status: "ABSENT_EXCUSED", reason: "Don xin phep da duoc duyet." }
+        : { status: "ABSENT_UNEXCUSED", reason: input.reviewNote || "Don xin phep bi tu choi." }
+    });
     await tx.notification.create({
       data: {
         userId: leave.studentId,
@@ -484,6 +490,89 @@ export const reviewLeaveRequest = asyncHandler(async (req, res) => {
     return result;
   });
   ok(res, updated);
+});
+
+export const myAttendanceReport = asyncHandler(async (req, res) => {
+  const sections = await prisma.courseSection.findMany({
+    where: { teacherId: req.user!.id },
+    include: {
+      subject: true,
+      semester: true,
+      enrollments: {
+        include: { student: { select: { id: true, studentCode: true, fullName: true, email: true, class: true } } }
+      },
+      sessions: {
+        where: { status: "CLOSED" },
+        include: { records: { select: { studentId: true, status: true } } }
+      }
+    },
+    orderBy: { createdAt: "desc" }
+  });
+
+  const reports = sections.map((section) => {
+    const thresholdPercent = Number(section.absenceThresholdPercent ?? 20);
+    const totalSessions = section.sessions.length;
+    const thresholdAbsences = totalSessions ? Math.ceil((totalSessions * thresholdPercent) / 100) : 0;
+    const expected = section.enrollments.length * totalSessions;
+    let presentCount = 0;
+
+    const students = section.enrollments.map((enrollment) => {
+      let studentPresentCount = 0;
+      let lateCount = 0;
+      let absentExcusedCount = 0;
+      let absentUnexcusedCount = 0;
+
+      for (const session of section.sessions) {
+        const record = session.records.find((item) => item.studentId === enrollment.studentId);
+        if (record?.status === "PRESENT") {
+          studentPresentCount += 1;
+        } else if (record?.status === "LATE") {
+          studentPresentCount += 1;
+          lateCount += 1;
+        } else if (record?.status === "ABSENT_EXCUSED") {
+          absentExcusedCount += 1;
+        } else {
+          absentUnexcusedCount += 1;
+        }
+      }
+
+      presentCount += studentPresentCount;
+      const absentCount = absentExcusedCount + absentUnexcusedCount;
+      const absencePercent = totalSessions ? Math.round((absentCount / totalSessions) * 100) : 0;
+
+      return {
+        student: enrollment.student,
+        presentCount: studentPresentCount,
+        lateCount,
+        absentExcusedCount,
+        absentUnexcusedCount,
+        absentCount,
+        thresholdAbsences,
+        totalSessions,
+        absencePercent,
+        warning: totalSessions > 0 && absencePercent >= thresholdPercent
+      };
+    });
+
+    const warningCount = students.filter((student) => student.warning).length;
+
+    return {
+      id: section.id,
+      code: section.code,
+      subject: section.subject,
+      semester: section.semester,
+      totalStudents: section.enrollments.length,
+      totalSessions,
+      attendancePercent: expected ? Math.round((presentCount / expected) * 100) : 100,
+      absencePercent: expected ? Math.round(((expected - presentCount) / expected) * 100) : 0,
+      thresholdPercent,
+      thresholdAbsences,
+      warningCount,
+      students
+    };
+  });
+
+  ok(res, reports);
 });
 
 export const exportSectionReport = asyncHandler(async (req, res) => {

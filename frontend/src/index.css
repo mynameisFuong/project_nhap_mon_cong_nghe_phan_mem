@@ -508,6 +508,11 @@ a { color: inherit; text-decoration: none; }
 }
 .lesson-row input { width: 18px; height: 18px; }
 .lesson-index { color: var(--muted); font-weight: 800; }
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .teacher-card {
   display: flex;
   align-items: center;

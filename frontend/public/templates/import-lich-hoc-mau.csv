@@ -1,4 +1,5 @@
-Ngay hoc,Bat dau,Ket thuc,Phong,Noi dung
-2026-09-10,07:30,10:00,A101,Gioi thieu mon hoc
-2026-09-17,07:30,10:00,A101,Yeu cau phan mem
-2026-09-24,07:30,10:00,A101,Phan tich yeu cau
+Lop hoc phan,Mon hoc,Ngay hoc,Bat dau,Ket thuc,Phong,Giang vien,Noi dung
+DB101-02,Cơ sở dữ liệu,2026-06-28,21:00,22:00,A101,Nguyen Ngoc Phuong,Phan tich yeu cau
+DB101-02,Cơ sở dữ liệu,2026-09-10,07:30,10:00,A101,Nguyen Ngoc Phuong,Gioi thieu mon hoc
+DB101-02,Cơ sở dữ liệu,2026-09-17,07:30,10:00,A101,Nguyen Ngoc Phuong,Yeu cau phan mem
+DB101-02,Cơ sở dữ liệu,2026-09-24,07:30,10:00,A101,Nguyen Ngoc Phuong,Phan tich yeu cau

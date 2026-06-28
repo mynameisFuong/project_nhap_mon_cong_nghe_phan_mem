@@ -1,7 +1,28 @@
 import { PrismaClient } from "@prisma/client";
+import fs from "node:fs";
+import path from "node:path";
 import { hashPassword } from "../src/utils/password.js";
 
 const prisma = new PrismaClient();
+
+type CsvRow = Record<string, string>;
+
+const parseCsv = (content: string) => {
+  const [headerLine, ...lines] = content.trim().split(/\r?\n/);
+  const headers = headerLine.split(",").map((item) => item.trim());
+  return lines.filter(Boolean).map((line) => {
+    const values = line.split(",").map((item) => item.trim());
+    return headers.reduce<CsvRow>((row, header, index) => {
+      row[header] = values[index] ?? "";
+      return row;
+    }, {});
+  });
+};
+
+const readSeedScheduleRows = () => {
+  const filePath = path.resolve(process.cwd(), "..", "frontend", "public", "templates", "import-lich-hoc-mau.csv");
+  return parseCsv(fs.readFileSync(filePath, "utf8"));
+};
 
 async function main() {
   const passwordHash = await hashPassword("123456");
@@ -103,6 +124,31 @@ async function main() {
       where: { courseSectionId_studentId: { courseSectionId: section1.id, studentId: student.id } },
       update: {},
       create: { courseSectionId: section1.id, studentId: student.id }
+    });
+  }
+
+  const sectionByCode = new Map([[section1.code, section1]]);
+  for (const row of readSeedScheduleRows()) {
+    const section = sectionByCode.get(row["Lop hoc phan"] || section1.code);
+    if (!section || !row["Ngay hoc"] || !row["Bat dau"] || !row["Ket thuc"]) continue;
+    const lessonDate = new Date(row["Ngay hoc"]);
+    const startTime = row["Bat dau"];
+    const endTime = row["Ket thuc"];
+    await prisma.lesson.upsert({
+      where: { courseSectionId_lessonDate_startTime: { courseSectionId: section.id, lessonDate, startTime } },
+      update: {
+        endTime,
+        room: row["Phong"] || null,
+        topic: row["Noi dung"] || null
+      },
+      create: {
+        courseSectionId: section.id,
+        lessonDate,
+        startTime,
+        endTime,
+        room: row["Phong"] || undefined,
+        topic: row["Noi dung"] || undefined
+      }
     });
   }
 

@@ -14,6 +14,7 @@ import {
   manualMark,
   markNotificationRead,
   markNotificationsRead,
+  myAttendanceReport,
   myNotifications,
   mySections,
   sectionLessons,
@@ -28,6 +29,7 @@ export const teacherRoutes = Router();
 teacherRoutes.use(authorize("TEACHER", "ADMIN"));
 
 teacherRoutes.get("/sections", mySections);
+teacherRoutes.get("/reports", myAttendanceReport);
 teacherRoutes.get("/notifications", myNotifications);
 teacherRoutes.patch("/notifications/:id/read", markNotificationRead);
 teacherRoutes.patch("/notifications/read-all", markNotificationsRead);

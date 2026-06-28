@@ -46,10 +46,12 @@ export function AttendanceSessionPage() {
   const [creatingLesson, setCreatingLesson] = useState(false);
   const [scheduleFile, setScheduleFile] = useState<File | null>(null);
   const [importingSchedule, setImportingSchedule] = useState(false);
+  const [now, setNow] = useState(() => new Date());
   const sectionLessons = useMemo(() => (lessons.data ?? []).filter((lesson) => !lesson.courseSectionId || lesson.courseSectionId === sectionId), [lessons.data, sectionId]);
-  const availableLessons = useMemo(() => sectionLessons.filter((lesson) =>
-    !isLessonFinished(lesson) && !(lesson.sessions?.length ?? (lesson.session ? 1 : 0))
-  ), [sectionLessons]);
+  const selectedSection = useMemo(() => (sections.data ?? []).find((section) => section.id === sectionId), [sections.data, sectionId]);
+  const selectableLessons = sectionLessons;
+  const selectedLesson = useMemo(() => selectableLessons.find((lesson) => lesson.id === lessonId), [selectableLessons, lessonId]);
+  const canCreateSelectedLesson = Boolean(selectedLesson && isLessonInTimeWindow(selectedLesson, now));
   const sessionOptions = useMemo<SessionOption[]>(() => sectionLessons.flatMap((lesson) =>
     (lesson.sessions?.length ? lesson.sessions : lesson.session ? [lesson.session] : [])
       .map((session) => ({ ...session, lesson }))
@@ -67,6 +69,11 @@ export function AttendanceSessionPage() {
   }, []);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!sectionId) return;
     const timer = window.setInterval(() => {
       void lessons.reload();
@@ -75,14 +82,14 @@ export function AttendanceSessionPage() {
   }, [sectionId]);
 
   useEffect(() => {
-    if (!availableLessons.length) {
+    if (!selectableLessons.length) {
       if (lessonId) setLessonId("");
       return;
     }
-    if (!lessonId || !availableLessons.some((lesson) => lesson.id === lessonId)) {
-      setLessonId(availableLessons[0].id);
+    if (!lessonId || !selectableLessons.some((lesson) => lesson.id === lessonId)) {
+      setLessonId(selectableLessons.find((lesson) => isLessonInTimeWindow(lesson, now))?.id ?? selectableLessons[0].id);
     }
-  }, [availableLessons, lessonId]);
+  }, [selectableLessons, lessonId, now]);
 
   useEffect(() => {
     const hasSelectedSession = sessionOptions.some((session) => session.id === reviewSessionId);
@@ -181,8 +188,10 @@ export function AttendanceSessionPage() {
   };
 
   const createSession = async () => {
-    if (sessionId) return showToast("Vui long ket thuc phien dang mo truoc khi tao phien moi.", "error");
+    if (sessionId) return showToast("Vui lòng kết thúc phiên đang mở trước khi tạo phiên mới.", "error");
     if (!lessonId) return showToast("Không còn buổi học nào có thể tạo phiên.", "error");
+    if (!selectedLesson) return showToast("Vui lòng chọn buổi học trong lịch học.", "error");
+    if (!canCreateSelectedLesson) return showToast("Chỉ được tạo phiên trong đúng ngày và khung giờ diễn ra buổi học.", "error");
     try {
       const session: any = await teacherService.createSession(lessonId);
       setSessionId(session.id);
@@ -301,7 +310,7 @@ export function AttendanceSessionPage() {
       setReviewSessionId(closedSessionId);
       setSummary(await teacherService.sessionSummary(closedSessionId));
       setActiveTab("review");
-      showToast("Da ket thuc phien dang mo.", "success");
+      showToast("Đã kết thúc phiên đang mở.", "success");
     } catch (err) {
       showToast(getErrorMessage(err), "error");
     }
@@ -323,7 +332,7 @@ export function AttendanceSessionPage() {
         <section className="panel">
           <div className="panel-head">
             <div>
-              <h2>Phien dang mo</h2>
+              <h2>Phiên đang mở</h2>
               <p>
                 {openSession.data.courseSection?.code} - {openSession.data.courseSection?.subject?.name}
                 {" | "}
@@ -331,8 +340,8 @@ export function AttendanceSessionPage() {
               </p>
             </div>
             <div className="modal-actions">
-              <Button type="button" variant="outline" icon={<QrCode size={18} />} onClick={openActiveSession}>Mo phien</Button>
-              <Button type="button" variant="danger" icon={<Square size={18} />} onClick={closeActiveSession}>Ket thuc phien</Button>
+              <Button type="button" variant="outline" icon={<QrCode size={18} />} onClick={openActiveSession}>Mở phiên</Button>
+              <Button type="button" variant="danger" icon={<Square size={18} />} onClick={closeActiveSession}>Kết thúc phiên</Button>
             </div>
           </div>
         </section>
@@ -342,14 +351,19 @@ export function AttendanceSessionPage() {
           {(sections.data ?? []).map((section) => <option key={section.id} value={section.id}>{section.code} - {section.subject?.name}</option>)}
         </Select>
         <Select label="Buổi học" value={lessonId} onChange={(e) => setLessonId(e.target.value)}>
-          {availableLessons.length ? availableLessons.map((lesson) => (
+          {selectableLessons.length ? selectableLessons.map((lesson) => (
             <option key={lesson.id} value={lesson.id}>
-              {lesson.lessonDate.slice(0, 10)} - {lesson.startTime} ({lesson.sessions?.length ?? (lesson.session ? 1 : 0)} phiên)
+              {formatLessonOption(lesson, selectedSection)}
             </option>
-          )) : <option value="">Không còn buổi học trong thời gian mở</option>}
+          )) : <option value="">Chưa có lịch học từ file import</option>}
         </Select>
-        <Button icon={<Play size={18} />} onClick={createSession} disabled={!availableLessons.length}>Tạo phiên</Button>
+        <Button icon={<Play size={18} />} onClick={createSession} disabled={!canCreateSelectedLesson}>Tạo phiên</Button>
       </section>
+      {selectedLesson && !canCreateSelectedLesson && (
+        <p className="muted-text">
+          Chỉ có thể tạo phiên trong khung giờ {selectedLesson.startTime}-{selectedLesson.endTime} ngày {selectedLesson.lessonDate.slice(0, 10)}.
+        </p>
+      )}
 
       <section className="panel">
         <div className="panel-head">
@@ -499,7 +513,20 @@ function todayInputValue() {
   return new Date(now.getTime() - timezoneOffset).toISOString().slice(0, 10);
 }
 
-function isLessonFinished(lesson: { lessonDate: string; endTime: string }) {
+function isLessonInTimeWindow(lesson: { lessonDate: string; startTime: string; endTime: string }, now: Date) {
   const lessonDate = lesson.lessonDate.slice(0, 10);
-  return new Date(`${lessonDate}T${lesson.endTime}:00`).getTime() <= Date.now();
+  const startAt = new Date(`${lessonDate}T${lesson.startTime}:00`).getTime();
+  const endAt = new Date(`${lessonDate}T${lesson.endTime}:00`).getTime();
+  const current = now.getTime();
+  return current >= startAt && current < endAt;
+}
+
+function formatLessonOption(lesson: Lesson, section?: { subject?: { name: string }; teacher?: { fullName: string } }) {
+  const subjectName = lesson.courseSection?.subject?.name ?? section?.subject?.name ?? "Học phần";
+  const teacherName = lesson.courseSection?.teacher?.fullName ?? section?.teacher?.fullName ?? "Giảng viên";
+  const lessonDate = lesson.lessonDate.slice(0, 10);
+  const room = lesson.room ? ` - ${lesson.room}` : "";
+  const sessionCount = lesson.sessions?.length ?? (lesson.session ? 1 : 0);
+  const sessionText = sessionCount ? ` - ${sessionCount} phiên` : "";
+  return `${subjectName} - ${lessonDate} ${lesson.startTime}-${lesson.endTime}${room} - ${teacherName}${sessionText}`;
 }

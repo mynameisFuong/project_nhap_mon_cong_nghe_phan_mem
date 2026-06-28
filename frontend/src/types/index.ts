@@ -40,6 +40,7 @@ export type Lesson = {
   endTime: string;
   room?: string;
   topic?: string;
+  courseSection?: CourseSection;
   session?: AttendanceSession | null;
   sessions?: AttendanceSession[];
 };
@@ -77,8 +78,37 @@ export type AttendanceSessionSummary = {
   notAttended: Array<AttendanceRecord | StudentInSection>;
 };
 
+export type TeacherReportStudent = {
+  student: User & { class?: ClassRoom };
+  presentCount: number;
+  lateCount: number;
+  absentExcusedCount: number;
+  absentUnexcusedCount: number;
+  absentCount: number;
+  thresholdAbsences: number;
+  totalSessions: number;
+  absencePercent: number;
+  warning: boolean;
+};
+
+export type TeacherSectionReport = {
+  id: string;
+  code: string;
+  subject?: Subject;
+  semester?: Semester;
+  totalStudents: number;
+  totalSessions: number;
+  attendancePercent: number;
+  absencePercent: number;
+  thresholdPercent: number;
+  thresholdAbsences: number;
+  warningCount: number;
+  students: TeacherReportStudent[];
+};
+
 export type LeaveRequest = {
   id: string;
+  attendanceRecordId?: string | null;
   reason: string;
   evidencePath: string;
   status: "PENDING" | "APPROVED" | "REJECTED";

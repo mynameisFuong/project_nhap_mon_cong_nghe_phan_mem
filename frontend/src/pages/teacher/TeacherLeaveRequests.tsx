@@ -97,8 +97,8 @@ export function TeacherLeaveRequests() {
         </div>
         <Textarea label="Ghi chú xử lý" value={note} onChange={(e) => setNote(e.target.value)} />
         <div className="modal-actions">
-          <Button variant="danger" icon={<X size={16} />} onClick={() => review("REJECTED")}>Từ chối</Button>
-          <Button icon={<Check size={16} />} onClick={() => review("APPROVED")}>Duyệt</Button>
+          <Button variant="danger" icon={<X size={16} />} onClick={() => review("REJECTED")} disabled={selected?.status !== "PENDING"}>Từ chối</Button>
+          <Button icon={<Check size={16} />} onClick={() => review("APPROVED")} disabled={selected?.status !== "PENDING"}>Duyệt</Button>
         </div>
       </Modal>
     </div>

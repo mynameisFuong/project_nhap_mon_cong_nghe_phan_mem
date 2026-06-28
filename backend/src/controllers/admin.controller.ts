@@ -81,6 +81,35 @@ const readTableFile = async (filePath: string): Promise<ExcelTable> => {
   return firstSheetRows(await readXlsxFile(filePath));
 };
 
+const rowValue = (row: Record<string, ExcelCell>, keys: string[]) => {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim()) return value;
+  }
+  return "";
+};
+
+const cellToDateInput = (value: ExcelCell) => {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (match) return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+  return text;
+};
+
+const cellToTimeInput = (value: ExcelCell) => {
+  if (value instanceof Date) return value.toISOString().slice(11, 16);
+  if (typeof value === "number") {
+    const totalMinutes = Math.round(value * 24 * 60);
+    const hours = Math.floor(totalMinutes / 60) % 24;
+    const minutes = totalMinutes % 60;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  return match ? `${match[1].padStart(2, "0")}:${match[2]}` : text;
+};
+
 const importErrorMessage = (error: unknown) => {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     const target = String(error.meta?.target ?? "");
@@ -310,6 +339,98 @@ export const createLesson = asyncHandler(async (req, res) => {
     topic: z.string().optional()
   }).parse(req.body);
   ok(res, await prisma.lesson.create({ data: { ...input, courseSectionId: req.params.sectionId } }), 201);
+});
+
+export const importLessons = asyncHandler(async (req, res) => {
+  if (!req.file) throw new AppError(422, "FILE_REQUIRED", "Cần upload file Excel hoặc CSV.");
+  const selectedSection = await prisma.courseSection.findUnique({
+    where: { id: req.params.sectionId },
+    include: { subject: true, teacher: { select: { fullName: true, email: true, teacherCode: true } } }
+  });
+  if (!selectedSection) throw new AppError(404, "SECTION_NOT_FOUND", "Không tìm thấy lớp học phần.");
+
+  const table = await readTableFile(req.file.path);
+  if (table.length < 2) throw new AppError(422, "EMPTY_FILE", "File không có dữ liệu lịch học.");
+
+  const headers = table[0].map((value) => String(value ?? "").replace(/^\uFEFF/, "").trim());
+  const rows = table.slice(1).map((values) => {
+    const item: Record<string, ExcelCell> = {};
+    headers.forEach((header, index) => {
+      if (header) item[header] = values[index] ?? "";
+    });
+    return item;
+  });
+
+  let successRows = 0;
+  const errors: Array<{ row: number; message: string }> = [];
+
+  for (const [index, row] of rows.entries()) {
+    const sectionKey = String(rowValue(row, ["Lớp học phần", "Lop hoc phan", "Mã lớp HP", "Ma lop HP", "Ma lop hoc phan", "Course section", "courseSection"]) ?? "").trim();
+    const lessonDate = cellToDateInput(rowValue(row, ["Ngày học", "Ngay hoc", "Ngày", "Ngay", "Date", "date"]));
+    const startTime = cellToTimeInput(rowValue(row, ["Bắt đầu", "Bat dau", "Giờ bắt đầu", "Gio bat dau", "Start", "startTime"]));
+    const endTime = cellToTimeInput(rowValue(row, ["Kết thúc", "Ket thuc", "Giờ kết thúc", "Gio ket thuc", "End", "endTime"]));
+    const room = String(rowValue(row, ["Phòng", "Phong", "Room", "room"]) ?? "").trim();
+    const topic = String(rowValue(row, ["Nội dung", "Noi dung", "Chủ đề", "Chu de", "Topic", "topic"]) ?? "").trim();
+
+    try {
+      const section = sectionKey
+        ? await prisma.courseSection.findFirst({
+          where: { OR: [{ code: sectionKey }, { id: sectionKey }] },
+          include: { subject: true, teacher: { select: { fullName: true, email: true, teacherCode: true } } }
+        })
+        : selectedSection;
+      if (!section) throw new Error(`Không tìm thấy lớp học phần ${sectionKey}.`);
+      if (!lessonDate || !startTime || !endTime) throw new Error("Thiếu Ngày học, Bắt đầu hoặc Kết thúc.");
+
+      const input = z.object({
+        lessonDate: z.coerce.date(),
+        startTime: z.string().regex(/^\d{2}:\d{2}$/),
+        endTime: z.string().regex(/^\d{2}:\d{2}$/)
+      }).parse({ lessonDate, startTime, endTime });
+
+      if (input.endTime <= input.startTime) throw new Error("Giờ kết thúc phải sau giờ bắt đầu.");
+
+      await prisma.lesson.upsert({
+        where: {
+          courseSectionId_lessonDate_startTime: {
+            courseSectionId: section.id,
+            lessonDate: input.lessonDate,
+            startTime: input.startTime
+          }
+        },
+        update: {
+          endTime: input.endTime,
+          room: room || null,
+          topic: topic || null
+        },
+        create: {
+          courseSectionId: section.id,
+          lessonDate: input.lessonDate,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          room: room || undefined,
+          topic: topic || undefined
+        }
+      });
+      successRows += 1;
+    } catch (error) {
+      errors.push({ row: index + 2, message: importErrorMessage(error) });
+    }
+  }
+
+  const log = await prisma.importLog.create({
+    data: {
+      courseSectionId: selectedSection.id,
+      importedById: req.user!.id,
+      fileName: req.file.originalname,
+      totalRows: rows.length,
+      successRows,
+      failedRows: errors.length,
+      errorDetails: errors
+    }
+  });
+
+  ok(res, { log, totalRows: rows.length, successRows, failedRows: errors.length, errors });
 });
 
 export const importStudents = asyncHandler(async (req, res) => {

@@ -1,4 +1,4 @@
-import type { AttendanceRecord, AttendanceSession, AttendanceSessionSummary, CourseSection, LeaveRequest, Lesson, NotificationItem, StudentInSection } from "../types";
+import type { AttendanceRecord, AttendanceSession, AttendanceSessionSummary, CourseSection, LeaveRequest, Lesson, NotificationItem, StudentInSection, TeacherSectionReport } from "../types";
 import { apiClient, unwrap, USE_MOCK } from "./apiClient";
 import { mockLessons, mockLeaves, mockNotifications, mockRecords, mockSections, mockUsers } from "./mockData";
 
@@ -26,6 +26,7 @@ export const teacherService = {
       : unwrap<{ sessionId: string; qrToken: string; qrUrl?: string; qrDataUrl: string; otp: string; validSeconds: number }>(apiClient.get(`/teacher/sessions/${sessionId}/qr-otp`)),
   records: (sessionId: string) => USE_MOCK ? Promise.resolve(mockRecords) : unwrap<AttendanceRecord[]>(apiClient.get(`/teacher/sessions/${sessionId}/records`)),
   sessionSummary: (sessionId: string) => USE_MOCK ? Promise.resolve({ session: { id: sessionId, courseSectionId: "", lessonId: "", status: "OPEN", openedAt: "" }, attended: mockRecords, notAttended: [] } as AttendanceSessionSummary) : unwrap<AttendanceSessionSummary>(apiClient.get(`/teacher/sessions/${sessionId}/summary`)),
+  reports: () => USE_MOCK ? Promise.resolve([] as TeacherSectionReport[]) : unwrap<TeacherSectionReport[]>(apiClient.get("/teacher/reports")),
   exportSessionAttended: async (sessionId: string) => {
     const response = await apiClient.get(`/teacher/sessions/${sessionId}/attended.xlsx`, { responseType: "blob" });
     return response.data as Blob;

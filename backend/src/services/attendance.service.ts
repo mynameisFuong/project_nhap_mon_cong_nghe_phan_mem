@@ -57,8 +57,13 @@ export const createAttendanceForStudent = async (studentId: string, qrToken: str
   } catch {
     // Raw QR token, nothing to normalize.
   }
-  const payloadSession = JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8")) as { sessionId?: string };
-  if (!payloadSession.sessionId) throw new AppError(400, "INVALID_QR", "QR token không hợp lệ.");
+  let payloadSession: { sessionId?: string };
+  try {
+    payloadSession = JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString("utf8")) as { sessionId?: string };
+  } catch {
+    throw new AppError(400, "INVALID_QR", "QR token khong hop le.");
+  }
+  if (!payloadSession.sessionId) throw new AppError(400, "INVALID_QR", "QR token khong hop le.");
 
   await closeExpiredSession(payloadSession.sessionId);
   const session = await prisma.attendanceSession.findUnique({ where: { id: payloadSession.sessionId } });

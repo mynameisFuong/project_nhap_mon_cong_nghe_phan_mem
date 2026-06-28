@@ -53,25 +53,37 @@ export const createLeaveRequest = asyncHandler(async (req, res) => {
       where: { attendanceSessionId_studentId: { attendanceSessionId: input.attendanceSessionId!, studentId: req.user!.id } },
       include: { attendanceSession: { include: { lesson: true, courseSection: { include: { subject: true } } } } }
     });
-  if (!record || !["ABSENT_UNEXCUSED", "ABSENT_EXCUSED"].includes(record.status)) {
-    throw new AppError(400, "NOT_ABSENT", "Chỉ gửi đơn cho buổi đã bị đánh dấu vắng.");
+  if (!record || record.status !== "ABSENT_UNEXCUSED") {
+    throw new AppError(400, "NOT_ABSENT", "Chi gui don cho buoi vang khong phep.");
   }
   const existingLeave = await prisma.leaveRequest.findUnique({ where: { attendanceRecordId: record.id } });
-  if (existingLeave) {
-    throw new AppError(409, "LEAVE_ALREADY_EXISTS", "Bạn đã gửi đơn cho buổi vắng này.");
+  if (existingLeave && existingLeave.status !== "REJECTED") {
+    throw new AppError(409, "LEAVE_ALREADY_EXISTS", "Ban da gui don cho buoi vang nay.");
   }
   const session = record.attendanceSession;
   const student = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } });
   const leave = await prisma.$transaction(async (tx) => {
-    const created = await tx.leaveRequest.create({
-      data: {
-        attendanceSessionId: record.attendanceSessionId,
-        attendanceRecordId: record.id,
-        studentId: req.user!.id,
-        reason: input.reason,
-        evidencePath
-      }
-    });
+    const created = existingLeave
+      ? await tx.leaveRequest.update({
+        where: { id: existingLeave.id },
+        data: {
+          status: "PENDING",
+          reason: input.reason,
+          evidencePath,
+          reviewNote: null,
+          reviewedById: null,
+          reviewedAt: null
+        }
+      })
+      : await tx.leaveRequest.create({
+        data: {
+          attendanceSessionId: record.attendanceSessionId,
+          attendanceRecordId: record.id,
+          studentId: req.user!.id,
+          reason: input.reason,
+          evidencePath
+        }
+      });
     await tx.notification.create({
       data: {
         userId: session.courseSection.teacherId,

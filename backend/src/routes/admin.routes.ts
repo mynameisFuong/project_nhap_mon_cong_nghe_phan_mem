@@ -17,6 +17,7 @@ import {
   deleteUser,
   importClasses,
   importClassStudents,
+  importLessons,
   importSections,
   importStudents,
   importStudentsByClass,
@@ -81,6 +82,7 @@ adminRoutes.delete("/sections/:id", deleteSection);
 adminRoutes.get("/sections/:sectionId/students", listSectionStudents);
 adminRoutes.get("/sections/:sectionId/lessons", listLessons);
 adminRoutes.post("/sections/:sectionId/lessons", createLesson);
+adminRoutes.post("/sections/:sectionId/lessons/import", upload.single("file"), importLessons);
 adminRoutes.post("/sections/:sectionId/import-students", upload.single("file"), importStudents);
 
 adminRoutes.get("/reports/overview", overviewReport);

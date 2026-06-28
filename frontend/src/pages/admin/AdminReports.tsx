@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, BellRing, Download, TrendingUp } from "lucide-react";
+import { AlertTriangle, BarChart3, BellRing, ChevronLeft, ChevronRight, Download, FileSpreadsheet, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
 import { StatCard } from "../../components/StatCard";
@@ -48,10 +48,46 @@ type ReportData = {
   warnings: WarningRow[];
 };
 
+const warningExportHeaders = ["MSSV", "Họ tên", "Lớp", "Lớp học phần", "Học phần", "Số buổi vắng", "Tổng số buổi", "Tỷ lệ vắng", "Ngưỡng vắng"];
+
+const getWarningExportRows = (warnings: WarningRow[]) => warnings.map((row) => [
+  row.student.studentCode ?? "",
+  row.student.fullName,
+  row.student.class?.code ?? "",
+  row.sectionCode,
+  row.subjectName,
+  row.absentCount,
+  row.totalSessions,
+  `${row.absencePercent}%`,
+  `${row.thresholdPercent}%`
+]);
+
+const downloadBlob = (content: BlobPart, fileName: string, type: string) => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const escapeCsvValue = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+
+const escapeHtmlValue = (value: string | number) => String(value)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+
 export function AdminReports() {
   const report = useAsync(() => adminService.overview() as Promise<ReportData>, []);
   const { showToast } = useToast();
   const [sending, setSending] = useState(false);
+  const [warningPage, setWarningPage] = useState(1);
+  const [warningPageSize, setWarningPageSize] = useState(10);
 
   const sendWarnings = async () => {
     try {
@@ -71,6 +107,33 @@ export function AdminReports() {
     summary: { attendancePercent: 100, sessionCount: 0, warningCount: 0 },
     sections: [],
     warnings: []
+  };
+  const warningPageCount = Math.max(1, Math.ceil(data.warnings.length / warningPageSize));
+  const currentWarningPage = Math.min(warningPage, warningPageCount);
+  const warningPageStart = (currentWarningPage - 1) * warningPageSize;
+  const paginatedWarnings = data.warnings.slice(warningPageStart, warningPageStart + warningPageSize);
+
+  const exportWarningsCsv = () => {
+    if (!data.warnings.length) return showToast("Không có dữ liệu sinh viên cảnh báo vắng để xuất.", "info");
+    const exportRows = getWarningExportRows(data.warnings);
+    const csv = [
+      warningExportHeaders.map(escapeCsvValue).join(","),
+      ...exportRows.map((row) => row.map(escapeCsvValue).join(","))
+    ].join("\r\n");
+    downloadBlob(`\ufeff${csv}`, "sinh-vien-canh-bao-vang.csv", "text/csv;charset=utf-8");
+    showToast("Đã xuất file CSV danh sách sinh viên cảnh báo vắng.", "success");
+  };
+
+  const exportWarningsExcel = () => {
+    if (!data.warnings.length) return showToast("Không có dữ liệu sinh viên cảnh báo vắng để xuất.", "info");
+    const exportRows = getWarningExportRows(data.warnings);
+    const headerCells = warningExportHeaders.map((header) => `<th>${escapeHtmlValue(header)}</th>`).join("");
+    const rows = exportRows.map((row) => (
+      `<tr>${row.map((value) => `<td>${escapeHtmlValue(value)}</td>`).join("")}</tr>`
+    )).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${headerCells}</tr></thead><tbody>${rows}</tbody></table></body></html>`;
+    downloadBlob(html, "sinh-vien-canh-bao-vang.xls", "application/vnd.ms-excel;charset=utf-8");
+    showToast("Đã xuất file Excel danh sách sinh viên cảnh báo vắng.", "success");
   };
 
   return (
@@ -121,8 +184,19 @@ export function AdminReports() {
           <h2>Sinh viên cảnh báo vắng</h2>
           <p>Sinh viên có tỷ lệ vắng đạt hoặc vượt ngưỡng của lớp học phần.</p>
         </div>
+        <div className="toolbar">
+          <div className="page-indicator">{data.warnings.length} sinh viên cảnh báo</div>
+          <div className="row-actions">
+            <Button type="button" variant="outline" icon={<Download size={16} />} onClick={exportWarningsCsv} disabled={!data.warnings.length}>
+              CSV
+            </Button>
+            <Button type="button" variant="outline" icon={<FileSpreadsheet size={16} />} onClick={exportWarningsExcel} disabled={!data.warnings.length}>
+              Excel
+            </Button>
+          </div>
+        </div>
         <DataTable
-          data={data.warnings}
+          data={paginatedWarnings}
           emptyTitle="Chưa có sinh viên bị cảnh báo vắng"
           columns={[
             { key: "studentCode", header: "MSSV", render: (row) => row.student.studentCode ?? "-" },
@@ -138,6 +212,23 @@ export function AdminReports() {
             }
           ]}
         />
+        {data.warnings.length > 0 && (
+          <div className="pagination-bar">
+            <div className="pagination-summary">
+              Hiển thị {warningPageStart + 1}-{Math.min(warningPageStart + warningPageSize, data.warnings.length)} / {data.warnings.length} sinh viên
+            </div>
+            <div className="pagination-controls">
+              <select value={warningPageSize} onChange={(event) => { setWarningPageSize(Number(event.target.value)); setWarningPage(1); }} aria-label="So sinh vien canh bao moi trang">
+                <option value={10}>10 / trang</option>
+                <option value={20}>20 / trang</option>
+                <option value={50}>50 / trang</option>
+              </select>
+              <Button variant="outline" icon={<ChevronLeft size={16} />} onClick={() => setWarningPage((value) => Math.max(1, value - 1))} disabled={currentWarningPage === 1}>Trước</Button>
+              <span className="page-indicator">Trang {currentWarningPage} / {warningPageCount}</span>
+              <Button variant="outline" icon={<ChevronRight size={16} />} onClick={() => setWarningPage((value) => Math.min(warningPageCount, value + 1))} disabled={currentWarningPage === warningPageCount}>Sau</Button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

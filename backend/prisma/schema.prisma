@@ -209,7 +209,7 @@ model AttendanceSession {
   records         AttendanceRecord[]
   leaveRequests   LeaveRequest[]
 
-  @@unique([lessonId])
+  @@index([lessonId])
   @@index([courseSectionId, status])
   @@map("attendance_sessions")
 }

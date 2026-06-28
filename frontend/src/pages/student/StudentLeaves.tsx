@@ -25,8 +25,17 @@ export function StudentLeaves() {
   const [file, setFile] = useState<File | null>(null);
 
   const absentRecords = useMemo(
-    () => (history.data ?? []).filter((record) => record.status.includes("ABSENT") && record.attendanceSession?.id),
-    [history.data]
+    () => {
+      const blockedRecordIds = new Set((leaves.data ?? [])
+        .filter((leave) => leave.status !== "REJECTED" && leave.attendanceRecordId)
+        .map((leave) => leave.attendanceRecordId));
+      return (history.data ?? []).filter((record) =>
+        record.status === "ABSENT_UNEXCUSED"
+        && record.attendanceSession?.id
+        && !blockedRecordIds.has(record.id)
+      );
+    },
+    [history.data, leaves.data]
   );
 
   const submit = async (event: FormEvent) => {
