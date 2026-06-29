@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "../config/prisma.js";
-import { closeExpiredSessions, createAttendanceForStudent, isLessonStarted } from "../services/attendance.service.js";
+import { closeExpiredSessions, createAttendanceForStudent } from "../services/attendance.service.js";
 import { asyncHandler, AppError, ok } from "../utils/http.js";
 
 export const myEnrollments = asyncHandler(async (req, res) => {
@@ -71,9 +71,6 @@ export const createLeaveRequest = asyncHandler(async (req, res) => {
     include: { courseSection: { include: { subject: true } } }
   });
   if (!lesson) throw new AppError(404, "LESSON_NOT_FOUND", "Khong tim thay buoi hoc trong lich cua sinh vien.");
-  if (!record && isLessonStarted(lesson)) {
-    throw new AppError(400, "LESSON_ALREADY_STARTED", "Buoi hoc da bat dau. Hay gui don tu ban ghi vang sau khi phien diem danh ket thuc.");
-  }
 
   const existingLeave = await prisma.leaveRequest.findUnique({
     where: { lessonId_studentId: { lessonId: lesson.id, studentId: req.user!.id } }

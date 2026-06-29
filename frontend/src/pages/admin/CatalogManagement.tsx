@@ -41,6 +41,7 @@ export function CatalogManagement() {
   const [bulkStudentImportErrors, setBulkStudentImportErrors] = useState<Array<{ row: number; message: string }>>([]);
   const [selectedClass, setSelectedClass] = useState<any | null>(null);
   const [classStudents, setClassStudents] = useState<any[]>([]);
+  const [removeStudentTarget, setRemoveStudentTarget] = useState<any | null>(null);
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [studentFile, setStudentFile] = useState<File | null>(null);
   const [studentImporting, setStudentImporting] = useState(false);
@@ -83,6 +84,7 @@ export function CatalogManagement() {
   const openClassStudents = async (classRoom: any) => {
     setSelectedClass(classRoom);
     setClassStudents([]);
+    setRemoveStudentTarget(null);
     setStudentFile(null);
     setStudentImportErrors([]);
     try {
@@ -92,6 +94,19 @@ export function CatalogManagement() {
       showToast(getErrorMessage(err), "error");
     } finally {
       setStudentsLoading(false);
+    }
+  };
+
+  const removeStudentFromClass = async () => {
+    if (!selectedClass || !removeStudentTarget) return;
+    try {
+      await adminService.removeClassStudent(selectedClass.id, removeStudentTarget.id);
+      setRemoveStudentTarget(null);
+      setClassStudents(await adminService.classStudents(selectedClass.id));
+      await classes.reload();
+      showToast("Đã xoá sinh viên khỏi lớp.", "success");
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
     }
   };
 
@@ -191,7 +206,11 @@ export function CatalogManagement() {
       setStudentImporting(true);
       const result = await adminService.importClassStudents(selectedClass.id, studentFile);
       setStudentImportErrors(result.errors ?? []);
-      setClassStudents(await adminService.classStudents(selectedClass.id));
+      try {
+        setClassStudents(await adminService.classStudents(selectedClass.id));
+      } catch {
+        showToast("Import đã xử lý xong, nhưng chưa làm mới được danh sách sinh viên.", "info");
+      }
       showToast(`Import hoàn tất: ${result.successRows}/${result.totalRows} sinh viên thành công.`, result.failedRows ? "info" : "success");
     } catch (err) {
       showToast(getErrorMessage(err), "error");
@@ -379,49 +398,71 @@ export function CatalogManagement() {
         open={Boolean(selectedClass)}
         title={`Sinh viên lớp ${selectedClass?.code ?? ""}`}
         onClose={() => setSelectedClass(null)}
+        className="student-class-modal"
       >
-        <div className="page-stack">
-          <div className="upload-guide compact-guide">
-            <p>File cần có các cột: MSSV, Họ tên, Email. Sinh viên mới sẽ được tạo tài khoản mặc định mật khẩu 123456 với vai trò sinh viên.</p>
-            <a className="btn btn-outline" href="/templates/import-sinh-vien-theo-lop-mau.csv" download>
-              <Download size={18} />
-              <span>Tải file mẫu CSV</span>
-            </a>
+        <div className="student-class-modal-body">
+          <div className="student-class-import">
+            <div className="upload-guide compact-guide">
+              <p>File cần có các cột: MSSV, Họ tên, Email. Sinh viên mới sẽ được tạo tài khoản mặc định mật khẩu 123456 với vai trò sinh viên.</p>
+              <a className="btn btn-outline" href="/templates/import-sinh-vien-theo-lop-mau.csv" download>
+                <Download size={18} />
+                <span>Tải file mẫu CSV</span>
+              </a>
+            </div>
+            <label className="dropzone compact">
+              <FileUp size={24} />
+              <span>{studentFile ? studentFile.name : "Chọn file .xlsx hoặc .csv"}</span>
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={onStudentImportFile} />
+            </label>
+            <div className="modal-actions">
+              <Button type="button" disabled={studentImporting} onClick={submitStudentImport}>{studentImporting ? "Đang import" : "Import sinh viên vào lớp"}</Button>
+            </div>
           </div>
-          <label className="dropzone compact">
-            <FileUp size={24} />
-            <span>{studentFile ? studentFile.name : "Chọn file .xlsx hoặc .csv"}</span>
-            <input type="file" accept=".xlsx,.xls,.csv" onChange={onStudentImportFile} />
-          </label>
-          <div className="modal-actions">
-            <Button type="button" disabled={studentImporting} onClick={submitStudentImport}>{studentImporting ? "Đang import" : "Import sinh viên vào lớp"}</Button>
+          <div className="student-class-list">
+            {studentImportErrors.length > 0 && (
+              <DataTable
+                data={studentImportErrors}
+                emptyTitle="Chưa có lỗi import"
+                columns={[
+                  { key: "row", header: "Dòng", render: (row) => row.row },
+                  { key: "message", header: "Lỗi", render: (row) => row.message }
+                ]}
+              />
+            )}
+            {studentsLoading ? (
+              <LoadingSpinner />
+            ) : (
+              <DataTable
+                data={classStudents}
+                emptyTitle="Lớp này chưa có sinh viên"
+                columns={[
+                  { key: "code", header: "MSSV", render: (row) => row.studentCode ?? "-" },
+                  { key: "name", header: "Họ tên", render: (row) => <strong>{row.fullName}</strong> },
+                  { key: "email", header: "Email", render: (row) => row.email },
+                  { key: "status", header: "Trạng thái", render: (row) => row.status ?? "-" },
+                  {
+                    key: "actions",
+                    header: "Thao tác",
+                    render: (row) => (
+                      <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => setRemoveStudentTarget(row)}>
+                        Xóa
+                      </Button>
+                    )
+                  }
+                ]}
+              />
+            )}
           </div>
-          {studentImportErrors.length > 0 && (
-            <DataTable
-              data={studentImportErrors}
-              emptyTitle="Chưa có lỗi import"
-              columns={[
-                { key: "row", header: "Dòng", render: (row) => row.row },
-                { key: "message", header: "Lỗi", render: (row) => row.message }
-              ]}
-            />
-          )}
-          {studentsLoading ? (
-            <LoadingSpinner />
-          ) : (
-            <DataTable
-              data={classStudents}
-              emptyTitle="Lớp này chưa có sinh viên"
-              columns={[
-                { key: "code", header: "MSSV", render: (row) => row.studentCode ?? "-" },
-                { key: "name", header: "Họ tên", render: (row) => <strong>{row.fullName}</strong> },
-                { key: "email", header: "Email", render: (row) => row.email },
-                { key: "status", header: "Trạng thái", render: (row) => row.status ?? "-" }
-              ]}
-            />
-          )}
         </div>
       </Modal>
+      <ConfirmDialog
+        open={Boolean(removeStudentTarget)}
+        title="Xóa sinh viên khỏi lớp"
+        message={`Bạn chắc chắn muốn xóa ${removeStudentTarget?.fullName ?? "sinh viên này"} khỏi lớp ${selectedClass?.code ?? ""}?`}
+        confirmText="Xóa khỏi lớp"
+        onCancel={() => setRemoveStudentTarget(null)}
+        onConfirm={removeStudentFromClass}
+      />
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title={`Xóa ${tab.toLowerCase()}`}

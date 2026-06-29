@@ -68,6 +68,15 @@ const rowValue = (row: Record<string, ExcelCell>, keys: string[]) => {
   return "";
 };
 
+const normalizeLookup = (value: unknown) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .trim()
+    .toLowerCase();
+
+const sameLookup = (left: unknown, right: unknown) => normalizeLookup(left) === normalizeLookup(right);
+
 const cellToDateInput = (value: ExcelCell) => {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   const text = String(value ?? "").trim();
@@ -160,6 +169,11 @@ export const createSectionLesson = asyncHandler(async (req, res) => {
 export const importSectionLessons = asyncHandler(async (req, res) => {
   if (!req.file) throw new AppError(422, "FILE_REQUIRED", "Cần upload file Excel hoặc CSV.");
   await ensureTeacherOwnsSection(req.user!.id, req.params.sectionId);
+  const selectedSection = await prisma.courseSection.findUnique({
+    where: { id: req.params.sectionId },
+    include: { subject: true, teacher: { select: { fullName: true, email: true, teacherCode: true } } }
+  });
+  if (!selectedSection) throw new AppError(404, "SECTION_NOT_FOUND", "Không tìm thấy lớp học phần.");
 
   const table = await readTableFile(req.file.path);
   if (table.length < 2) throw new AppError(422, "EMPTY_FILE", "File không có dữ liệu lịch học.");
@@ -177,6 +191,9 @@ export const importSectionLessons = asyncHandler(async (req, res) => {
   const errors: Array<{ row: number; message: string }> = [];
 
   for (const [index, row] of rows.entries()) {
+    const sectionKey = String(rowValue(row, ["Lớp học phần", "Lop hoc phan", "Mã lớp HP", "Ma lop HP", "Ma lop hoc phan", "Course section", "courseSection"]) ?? "").trim();
+    const subjectKey = String(rowValue(row, ["Môn học", "Mon hoc", "Tên môn học", "Ten mon hoc", "Mã học phần", "Ma hoc phan", "Subject", "subject"]) ?? "").trim();
+    const teacherKey = String(rowValue(row, ["Giảng viên", "Giang vien", "Tên giảng viên", "Ten giang vien", "Email giảng viên", "Email giang vien", "Teacher", "teacher"]) ?? "").trim();
     const lessonDate = cellToDateInput(rowValue(row, ["Ngày học", "Ngay hoc", "Ngày", "Ngay", "Date", "date"]));
     const startTime = cellToTimeInput(rowValue(row, ["Bắt đầu", "Bat dau", "Giờ bắt đầu", "Gio bat dau", "Start", "startTime"]));
     const endTime = cellToTimeInput(rowValue(row, ["Kết thúc", "Ket thuc", "Giờ kết thúc", "Gio ket thuc", "End", "endTime"]));
@@ -184,6 +201,22 @@ export const importSectionLessons = asyncHandler(async (req, res) => {
     const topic = String(rowValue(row, ["Nội dung", "Noi dung", "Chủ đề", "Chu de", "Topic", "topic"]) ?? "").trim();
 
     try {
+      if (!sectionKey) throw new Error("Thiếu Lớp học phần.");
+      if (!sameLookup(sectionKey, selectedSection.code)) {
+        throw new Error(`Lớp học phần trong file (${sectionKey}) không khớp lớp đang import (${selectedSection.code}).`);
+      }
+      if (!subjectKey) throw new Error("Thiếu Môn học.");
+      if (!sameLookup(subjectKey, selectedSection.subject.name) && !sameLookup(subjectKey, selectedSection.subject.code)) {
+        throw new Error(`Môn học trong file (${subjectKey}) không khớp môn ${selectedSection.subject.name}.`);
+      }
+      if (!teacherKey) throw new Error("Thiếu Giảng viên.");
+      if (
+        !sameLookup(teacherKey, selectedSection.teacher.fullName) &&
+        !sameLookup(teacherKey, selectedSection.teacher.email) &&
+        !sameLookup(teacherKey, selectedSection.teacher.teacherCode)
+      ) {
+        throw new Error(`Giảng viên trong file (${teacherKey}) không khớp giảng viên ${selectedSection.teacher.fullName}.`);
+      }
       if (!lessonDate || !startTime || !endTime) throw new Error("Thiếu Ngày học, Bắt đầu hoặc Kết thúc.");
       const input = z.object({
         lessonDate: z.coerce.date(),
@@ -481,43 +514,49 @@ export const reviewLeaveRequest = asyncHandler(async (req, res) => {
       where: { id: leave.id },
       data: { status: input.status, reviewNote: input.reviewNote, reviewedById: req.user!.id, reviewedAt: new Date() }
     });
-    const session = leave.attendanceSession ?? await tx.attendanceSession.findFirst({
+    const sessions = await tx.attendanceSession.findMany({
       where: { lessonId: leave.lessonId },
       orderBy: { openedAt: "desc" }
     });
-    if (session) {
+    if (sessions.length > 0) {
+      let linkedSessionId = leave.attendanceSessionId ?? sessions[0].id;
+      let linkedRecordId = leave.attendanceRecordId;
       if (input.status === "APPROVED") {
-        const existingRecord = await tx.attendanceRecord.findUnique({
-          where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: leave.studentId } }
-        });
-        const record = existingRecord
-          ? existingRecord.status === "ABSENT_UNEXCUSED"
-            ? await tx.attendanceRecord.update({
-              where: { id: existingRecord.id },
-              data: { status: "ABSENT_EXCUSED", reason: "Don xin phep da duoc duyet.", method: "SYSTEM" }
-            })
-            : existingRecord
-          : await tx.attendanceRecord.create({
-            data: {
-            attendanceSessionId: session.id,
-            studentId: leave.studentId,
-            status: "ABSENT_EXCUSED",
-            method: "SYSTEM",
-            reason: "Don xin phep da duoc duyet."
-          }
-        });
+        for (const session of sessions) {
+          const existingRecord = await tx.attendanceRecord.findUnique({
+            where: { attendanceSessionId_studentId: { attendanceSessionId: session.id, studentId: leave.studentId } }
+          });
+          const record = existingRecord
+            ? existingRecord.status === "ABSENT_UNEXCUSED" || existingRecord.status === "ABSENT_EXCUSED"
+              ? await tx.attendanceRecord.update({
+                where: { id: existingRecord.id },
+                data: { status: "ABSENT_EXCUSED", reason: "Don xin phep da duoc duyet.", method: "SYSTEM" }
+              })
+              : existingRecord
+            : await tx.attendanceRecord.create({
+              data: {
+                attendanceSessionId: session.id,
+                studentId: leave.studentId,
+                status: "ABSENT_EXCUSED",
+                method: "SYSTEM",
+                reason: "Don xin phep da duoc duyet."
+              }
+            });
+          linkedSessionId = session.id;
+          linkedRecordId = record.id;
+        }
         await tx.leaveRequest.update({
           where: { id: leave.id },
-          data: { attendanceSessionId: session.id, attendanceRecordId: record.id }
+          data: { attendanceSessionId: linkedSessionId, attendanceRecordId: linkedRecordId }
         });
       } else {
         await tx.attendanceRecord.updateMany({
-          where: { attendanceSessionId: session.id, studentId: leave.studentId },
+          where: { attendanceSessionId: { in: sessions.map((session) => session.id) }, studentId: leave.studentId, status: "ABSENT_EXCUSED" },
           data: { status: "ABSENT_UNEXCUSED", reason: input.reviewNote || "Don xin phep bi tu choi." }
         });
         await tx.leaveRequest.update({
           where: { id: leave.id },
-          data: { attendanceSessionId: session.id }
+          data: { attendanceSessionId: linkedSessionId }
         });
       }
     }

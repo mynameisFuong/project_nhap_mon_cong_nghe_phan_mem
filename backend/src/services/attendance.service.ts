@@ -36,7 +36,7 @@ export const buildQrOtp = async (sessionId: string) => {
   if (session.status !== "OPEN") throw new AppError(400, "SESSION_CLOSED", "Phiên điểm danh đã đóng.");
   const window = currentWindow();
   const qrToken = createQrToken({ sessionId: session.id, courseSectionId: session.courseSectionId, window, nonce: session.nonce });
-  const appUrl = env.PUBLIC_APP_URL ?? env.FRONTEND_ORIGIN.split(",")[0]?.trim() ?? "http://localhost:5173";
+  const appUrl = publicAppUrl();
   const attendanceUrl = new URL("/student/attendance", appUrl);
   attendanceUrl.searchParams.set("qrToken", qrToken);
   const qrDataUrl = await QRCode.toDataURL(attendanceUrl.toString());
@@ -48,6 +48,23 @@ export const buildQrOtp = async (sessionId: string) => {
     otp: generateOtp(session.id, session.nonce, window),
     validSeconds: 30 - (Math.floor(Date.now() / 1000) % 30)
   };
+};
+
+const publicAppUrl = () => {
+  const origins = env.FRONTEND_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+  const configuredUrl = env.PUBLIC_APP_URL?.trim();
+  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  const candidate = configuredUrl || origins.find((origin) => {
+    try {
+      return !localHosts.has(new URL(origin).hostname);
+    } catch {
+      return false;
+    }
+  }) || origins[0] || "http://localhost:5173";
+
+  const url = new URL(candidate);
+  if (env.NODE_ENV === "development") url.protocol = "http:";
+  return url.toString();
 };
 
 export const createAttendanceForStudent = async (studentId: string, qrToken: string, otp: string) => {

@@ -56,6 +56,7 @@ export function AttendanceSessionPage() {
     (lesson.sessions?.length ? lesson.sessions : lesson.session ? [lesson.session] : [])
       .map((session) => ({ ...session, lesson }))
   ), [sectionLessons]);
+  const activeSessionOption = useMemo(() => sessionOptions.find((session) => session.id === sessionId), [sessionId, sessionOptions]);
 
   useEffect(() => {
     if (!sectionId && sections.data?.[0]) setSectionId(sections.data[0].id);
@@ -112,10 +113,11 @@ export function AttendanceSessionPage() {
         refreshTimer = window.setTimeout(load, Math.max(nextQr.validSeconds, 1) * 1000 + 250);
       } catch (err) {
         if (!active) return;
-        setSessionId("");
-        setQr(null);
-        setQrCountdown(30);
-        setRecords([]);
+        if (isSessionClosedError(err)) {
+          await showClosedSessionReview(sessionId);
+          return;
+        }
+        resetLiveSession();
         await lessons.reload();
         showToast(getErrorMessage(err), "error");
       }
@@ -126,6 +128,20 @@ export function AttendanceSessionPage() {
       if (refreshTimer) window.clearTimeout(refreshTimer);
     };
   }, [sessionId, showToast]);
+
+  useEffect(() => {
+    if (!sessionId || !activeSessionOption?.lesson || activeSessionOption.status !== "OPEN") return;
+    const lessonEndAt = new Date(`${activeSessionOption.lesson.lessonDate.slice(0, 10)}T${activeSessionOption.lesson.endTime}:00`).getTime();
+    const delay = lessonEndAt - Date.now() + 1_000;
+    if (delay <= 0) {
+      void showClosedSessionReview(sessionId);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void showClosedSessionReview(sessionId);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [sessionId, activeSessionOption?.lesson?.lessonDate, activeSessionOption?.lesson?.endTime, activeSessionOption?.status]);
 
   useEffect(() => {
     if (!sessionId || !qr) return;
@@ -168,6 +184,31 @@ export function AttendanceSessionPage() {
     setQrCountdown(30);
     setRecords([]);
     setManual(null);
+  };
+
+  const resetLiveSession = () => {
+    setSessionId("");
+    setQr(null);
+    setQrCountdown(30);
+    setRecords([]);
+    setManual(null);
+    setReason("");
+  };
+
+  const showClosedSessionReview = async (closedSessionId: string) => {
+    try {
+      const nextSummary = await teacherService.sessionSummary(closedSessionId);
+      resetLiveSession();
+      await Promise.all([lessons.reload(), openSession.reload()]);
+      setReviewSessionId(closedSessionId);
+      setSummary(nextSummary);
+      setActiveTab("review");
+      showToast("Phiên đã tự động kết thúc sau giờ học. Kết quả đã được lưu.", "info");
+    } catch (err) {
+      resetLiveSession();
+      await Promise.all([lessons.reload(), openSession.reload()]);
+      showToast(getErrorMessage(err), "error");
+    }
   };
 
   const exportAttended = async () => {
@@ -529,4 +570,10 @@ function formatLessonOption(lesson: Lesson, section?: { subject?: { name: string
   const sessionCount = lesson.sessions?.length ?? (lesson.session ? 1 : 0);
   const sessionText = sessionCount ? ` - ${sessionCount} phiên` : "";
   return `${subjectName} - ${lessonDate} ${lesson.startTime}-${lesson.endTime}${room} - ${teacherName}${sessionText}`;
+}
+
+function isSessionClosedError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const maybeAxiosError = error as { response?: { data?: { error?: { code?: string } } } };
+  return maybeAxiosError.response?.data?.error?.code === "SESSION_CLOSED";
 }

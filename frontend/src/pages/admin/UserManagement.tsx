@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { ChevronLeft, ChevronRight, Lock, Plus, Search, Unlock, UserRoundPen } from "lucide-react";
+import { ChevronLeft, ChevronRight, KeyRound, Lock, Plus, Search, Unlock, UserRoundPen } from "lucide-react";
 import { PageHeader } from "../../components/PageHeader";
 import { DataTable } from "../../components/DataTable";
 import { Button } from "../../components/Button";
@@ -27,7 +27,10 @@ export function UserManagement() {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirm, setConfirm] = useState<User | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<User | null>(null);
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const [form, setForm] = useState({ email: "", password: "123456", fullName: "", role: "STUDENT" as Role });
+  const [passwordForm, setPasswordForm] = useState({ password: "", confirmPassword: "" });
 
   const users = data ?? [];
   const filtered = useMemo(() => users.filter((user) => {
@@ -93,6 +96,30 @@ export function UserManagement() {
     }
   };
 
+  const openPasswordModal = (user: User) => {
+    setPasswordTarget(user);
+    setPasswordForm({ password: "", confirmPassword: "" });
+  };
+
+  const submitPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!passwordTarget) return;
+    if (passwordForm.password.length < 6) return showToast("Mật khẩu phải có ít nhất 6 ký tự.", "error");
+    if (passwordForm.password !== passwordForm.confirmPassword) return showToast("Mật khẩu xác nhận không khớp.", "error");
+    try {
+      setPasswordSaving(true);
+      await adminService.updateUserPassword(passwordTarget.id, passwordForm.password);
+      showToast("Đã cập nhật mật khẩu người dùng.", "success");
+      setPasswordTarget(null);
+      setPasswordForm({ password: "", confirmPassword: "" });
+      await reload();
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -112,7 +139,17 @@ export function UserManagement() {
             { key: "role", header: "Vai trò", render: (user) => <Badge tone="info">{roleText[user.role]}</Badge> },
             { key: "status", header: "Trạng thái", render: (user) => <Badge tone={user.status === "LOCKED" ? "danger" : "success"}>{user.status === "LOCKED" ? "Đã khóa" : "Hoạt động"}</Badge> },
             { key: "created", header: "Ngày tạo", render: (user) => shortDate(user.createdAt) },
-            { key: "actions", header: "Thao tác", render: (user) => <div className="row-actions"><Button variant="outline" icon={<UserRoundPen size={16} />} onClick={() => openEdit(user)}>Sửa</Button><Button variant={user.status === "LOCKED" ? "secondary" : "danger"} icon={user.status === "LOCKED" ? <Unlock size={16} /> : <Lock size={16} />} onClick={() => setConfirm(user)}>{user.status === "LOCKED" ? "Mở khóa" : "Khóa"}</Button></div> }
+            {
+              key: "actions",
+              header: "Thao tác",
+              render: (user) => (
+                <div className="row-actions">
+                  <Button variant="outline" icon={<UserRoundPen size={16} />} onClick={() => openEdit(user)}>Sửa</Button>
+                  <Button variant="outline" icon={<KeyRound size={16} />} onClick={() => openPasswordModal(user)}>Mật khẩu</Button>
+                  <Button variant={user.status === "LOCKED" ? "secondary" : "danger"} icon={user.status === "LOCKED" ? <Unlock size={16} /> : <Lock size={16} />} onClick={() => setConfirm(user)}>{user.status === "LOCKED" ? "Mở khóa" : "Khóa"}</Button>
+                </div>
+              )
+            }
           ]}
         />
         {filtered.length > 0 && (
@@ -141,6 +178,16 @@ export function UserManagement() {
           {!editingUser && <Input label="Mật khẩu mặc định" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
           <Select label="Vai trò" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}><option value="STUDENT">Sinh viên</option><option value="TEACHER">Giảng viên</option><option value="ADMIN">Admin</option></Select>
           <div className="modal-actions full-span"><Button variant="outline" type="button" onClick={() => { setModalOpen(false); setEditingUser(null); }}>Hủy</Button><Button type="submit">Lưu</Button></div>
+        </form>
+      </Modal>
+      <Modal open={Boolean(passwordTarget)} title={`Đổi mật khẩu ${passwordTarget?.fullName ?? ""}`} onClose={() => { setPasswordTarget(null); setPasswordForm({ password: "", confirmPassword: "" }); }}>
+        <form className="form-grid" onSubmit={submitPassword}>
+          <Input label="Mật khẩu mới" type="password" value={passwordForm.password} onChange={(e) => setPasswordForm({ ...passwordForm, password: e.target.value })} />
+          <Input label="Nhập lại mật khẩu" type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} />
+          <div className="modal-actions full-span">
+            <Button variant="outline" type="button" onClick={() => { setPasswordTarget(null); setPasswordForm({ password: "", confirmPassword: "" }); }}>Hủy</Button>
+            <Button type="submit" disabled={passwordSaving}>{passwordSaving ? "Đang lưu" : "Cập nhật mật khẩu"}</Button>
+          </div>
         </form>
       </Modal>
       <ConfirmDialog open={Boolean(confirm)} title="Xác nhận trạng thái" message={`Bạn muốn ${confirm?.status === "LOCKED" ? "mở khóa" : "khóa"} tài khoản ${confirm?.fullName}?`} onCancel={() => setConfirm(null)} onConfirm={() => { if (confirm) void toggleLock(confirm); setConfirm(null); }} />

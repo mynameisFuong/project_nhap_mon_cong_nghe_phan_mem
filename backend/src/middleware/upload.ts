@@ -1,11 +1,14 @@
 import path from "node:path";
+import fs from "node:fs";
 import multer from "multer";
 import { AppError } from "../utils/http.js";
 
 const storage = multer.diskStorage({
   destination: (_req, file, cb) => {
     const isExcel = [".xlsx", ".xls", ".csv"].includes(path.extname(file.originalname).toLowerCase());
-    cb(null, isExcel ? "uploads/imports" : "uploads/leave-evidence");
+    const destination = isExcel ? "uploads/imports" : "uploads/leave-evidence";
+    fs.mkdirSync(destination, { recursive: true });
+    cb(null, destination);
   },
   filename: (_req, file, cb) => {
     const safe = file.originalname.replace(/[^\w.-]/g, "_");

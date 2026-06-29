@@ -6,6 +6,7 @@ export const adminService = {
   users: () => USE_MOCK ? Promise.resolve(mockUsers) : unwrap<User[]>(apiClient.get("/admin/users")),
   createUser: (payload: Partial<User> & { password?: string }) => unwrap<User>(apiClient.post("/admin/users", payload)),
   updateUser: (id: string, payload: Partial<User>) => unwrap<User>(apiClient.patch(`/admin/users/${id}`, payload)),
+  updateUserPassword: (id: string, password: string) => unwrap<User>(apiClient.patch(`/admin/users/${id}/password`, { password })),
   lockUser: (id: string, locked: boolean) => unwrap<User>(apiClient.patch(`/admin/users/${id}/lock`, { locked })),
   deleteUser: (id: string) => unwrap(apiClient.delete(`/admin/users/${id}`)),
   faculties: () => USE_MOCK ? Promise.resolve(mockFaculties) : unwrap<Faculty[]>(apiClient.get("/admin/faculties")),
@@ -13,6 +14,7 @@ export const adminService = {
   deleteFaculty: (id: string) => USE_MOCK ? Promise.resolve({}) : unwrap(apiClient.delete(`/admin/faculties/${id}`)),
   classes: () => USE_MOCK ? Promise.resolve(mockClasses) : unwrap<ClassRoom[]>(apiClient.get("/admin/classes")),
   classStudents: (classId: string) => USE_MOCK ? Promise.resolve(mockUsers.filter((user) => user.role === "STUDENT" && user.classId === classId)) : unwrap<User[]>(apiClient.get(`/admin/classes/${classId}/students`)),
+  removeClassStudent: (classId: string, studentId: string) => USE_MOCK ? Promise.resolve({}) : unwrap(apiClient.delete(`/admin/classes/${classId}/students/${studentId}`)),
   importClassStudents: (classId: string, file: File) => {
     const data = new FormData();
     data.append("file", file);

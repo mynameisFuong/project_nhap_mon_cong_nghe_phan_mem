@@ -89,28 +89,32 @@ export function TeacherLeaveRequests() {
           { key: "action", header: "Thao tác", render: (row) => <Button variant="outline" icon={<ExternalLink size={16} />} onClick={() => setSelected(row)}>Chi tiết</Button> }
         ]} />
       </section>
-      <Modal open={Boolean(selected)} title="Chi tiết đơn xin phép" onClose={() => setSelected(null)}>
-        <div className="detail-list">
-          <p><strong>Sinh viên:</strong> {selected?.student?.fullName}</p>
-          <p><strong>Buổi học:</strong> {leaveLessonText(selected)}</p>
-          <p><strong>Lý do:</strong> {selected?.reason}</p>
-          <div className="evidence-block">
-            <strong>Minh chứng:</strong>
-            {!selectedEvidenceUrl && <p>Không có minh chứng.</p>}
-            {selectedEvidenceKind === "image" && <img className="evidence-preview" src={selectedEvidenceUrl} alt="Minh chứng đơn xin phép" />}
-            {selectedEvidenceKind === "pdf" && <iframe className="evidence-frame" src={selectedEvidenceUrl} title="Minh chứng đơn xin phép" />}
-            {selectedEvidenceUrl && (
-              <a className="btn btn-outline" href={selectedEvidenceUrl} target="_blank" rel="noreferrer">
-                <ExternalLink size={16} />
-                <span>Mở minh chứng</span>
-              </a>
-            )}
+      <Modal open={Boolean(selected)} title="Chi tiết đơn xin phép" onClose={() => setSelected(null)} className="leave-review-modal">
+        <div className="leave-review-body">
+          <div className="detail-list">
+            <p><strong>Sinh viên:</strong> {selected?.student?.fullName}</p>
+            <p><strong>Buổi học:</strong> {leaveLessonText(selected)}</p>
+            <p><strong>Lý do:</strong> {selected?.reason}</p>
+            <div className="evidence-block">
+              <strong>Minh chứng:</strong>
+              {!selectedEvidenceUrl && <p>Không có minh chứng.</p>}
+              {selectedEvidenceKind === "image" && <img className="evidence-preview leave-evidence-preview" src={selectedEvidenceUrl} alt="Minh chứng đơn xin phép" />}
+              {selectedEvidenceKind === "pdf" && <iframe className="evidence-frame leave-evidence-frame" src={selectedEvidenceUrl} title="Minh chứng đơn xin phép" />}
+              {selectedEvidenceUrl && (
+                <a className="btn btn-outline" href={selectedEvidenceUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} />
+                  <span>Mở minh chứng</span>
+                </a>
+              )}
+            </div>
           </div>
         </div>
-        <Textarea label="Ghi chú xử lý" value={note} onChange={(e) => setNote(e.target.value)} />
-        <div className="modal-actions">
+        <div className="leave-review-footer">
+          <Textarea label="Ghi chú xử lý" value={note} onChange={(e) => setNote(e.target.value)} />
+        <div className="modal-actions leave-review-actions">
           <Button variant="danger" icon={<X size={16} />} onClick={() => review("REJECTED")} disabled={selected?.status !== "PENDING"}>Từ chối</Button>
           <Button icon={<Check size={16} />} onClick={() => review("APPROVED")} disabled={selected?.status !== "PENDING"}>Duyệt</Button>
+        </div>
         </div>
       </Modal>
     </div>

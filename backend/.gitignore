@@ -2,6 +2,7 @@ node_modules
 dist
 .env
 uploads/*
+!uploads/imports/
 !uploads/.gitkeep
 !uploads/leave-evidence/.gitkeep
 !uploads/imports/.gitkeep

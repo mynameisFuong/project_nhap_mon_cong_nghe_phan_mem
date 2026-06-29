@@ -404,6 +404,47 @@ a { color: inherit; text-decoration: none; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .full-span { grid-column: 1 / -1; }
 .modal-actions { justify-content: flex-end; margin-top: 18px; }
+.student-class-modal {
+  width: min(1040px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.student-class-modal .modal-head { flex: 0 0 auto; }
+.student-class-modal-body {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
+}
+.student-class-import {
+  display: grid;
+  gap: 14px;
+}
+.student-class-import .modal-actions { margin-top: 0; }
+.student-class-list {
+  min-height: 180px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.student-class-list .table-wrap {
+  overflow: auto;
+}
+.student-class-list .data-table {
+  min-width: 820px;
+}
+.student-class-list .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.student-class-list .data-table th:last-child,
+.student-class-list .data-table td:last-child {
+  width: 116px;
+  text-align: right;
+}
 .confirm-body { display: flex; gap: 14px; align-items: center; color: var(--muted); }
 .tabs { display: flex; gap: 8px; margin-bottom: 18px; overflow-x: auto; }
 .tabs button {
@@ -624,6 +665,43 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #f8fafc;
+}
+.leave-review-modal {
+  width: min(760px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+.leave-review-modal .modal-head {
+  flex: 0 0 auto;
+}
+.leave-review-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+.leave-evidence-preview {
+  max-height: min(42vh, 360px);
+}
+.leave-evidence-frame {
+  height: min(42vh, 420px);
+}
+.leave-review-footer {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  margin: 12px -20px 0;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+.leave-review-footer .field {
+  margin: 0;
+}
+.leave-review-actions {
+  margin-top: 12px;
 }
 .toast-stack { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 10px; z-index: 100; }
 .toast { min-width: 280px; max-width: min(420px, calc(100vw - 36px)); background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow); font-weight: 700; }

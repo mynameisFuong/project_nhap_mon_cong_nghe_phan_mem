@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,7 +10,7 @@ type CsvRow = Record<string, string>;
 
 const parseCsv = (content: string) => {
   const [headerLine, ...lines] = content.trim().split(/\r?\n/);
-  const headers = headerLine.split(",").map((item) => item.trim());
+  const headers = headerLine.split(",").map((item) => item.replace(/^\uFEFF/, "").trim());
   return lines.filter(Boolean).map((line) => {
     const values = line.split(",").map((item) => item.trim());
     return headers.reduce<CsvRow>((row, header, index) => {

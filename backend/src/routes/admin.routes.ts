@@ -32,13 +32,15 @@ import {
   listUsers,
   lockUser,
   overviewReport,
+  removeClassStudent,
   sendAttendanceWarnings,
   updateClass,
   updateFaculty,
   updateSection,
   updateSemester,
   updateSubject,
-  updateUser
+  updateUser,
+  updateUserPassword
 } from "../controllers/admin.controller.js";
 
 export const adminRoutes = Router();
@@ -47,6 +49,7 @@ adminRoutes.use(authorize("ADMIN"));
 adminRoutes.get("/users", listUsers);
 adminRoutes.post("/users", createUser);
 adminRoutes.patch("/users/:id", updateUser);
+adminRoutes.patch("/users/:id/password", updateUserPassword);
 adminRoutes.patch("/users/:id/lock", lockUser);
 adminRoutes.delete("/users/:id", deleteUser);
 
@@ -61,6 +64,7 @@ adminRoutes.post("/classes/import", upload.single("file"), importClasses);
 adminRoutes.post("/classes/import-students", upload.single("file"), importStudentsByClass);
 adminRoutes.get("/classes/:id/students", listClassStudents);
 adminRoutes.post("/classes/:id/import-students", upload.single("file"), importClassStudents);
+adminRoutes.delete("/classes/:id/students/:studentId", removeClassStudent);
 adminRoutes.patch("/classes/:id", updateClass);
 adminRoutes.delete("/classes/:id", deleteClass);
 

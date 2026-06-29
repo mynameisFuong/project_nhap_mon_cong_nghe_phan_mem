@@ -89,6 +89,21 @@ const rowValue = (row: Record<string, ExcelCell>, keys: string[]) => {
   return "";
 };
 
+const normalizeLookup = (value: unknown) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .trim()
+    .toLowerCase();
+
+const sameLookup = (left: unknown, right: unknown) => normalizeLookup(left) === normalizeLookup(right);
+
+const findStudentByCode = (studentCode: string) =>
+  prisma.user.findFirst({ where: { role: "STUDENT", studentCode: { equals: studentCode, mode: "insensitive" } } });
+
+const findUserByEmail = (email: string) =>
+  prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" } } });
+
 const cellToDateInput = (value: ExcelCell) => {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   const text = String(value ?? "").trim();
@@ -143,6 +158,19 @@ export const updateUser = asyncHandler(async (req, res) => {
   ok(res, { id: user.id, email: user.email, role: user.role, status: user.status });
 });
 
+export const updateUserPassword = asyncHandler(async (req, res) => {
+  const { password } = z.object({ password: z.string().min(6, "Mật khẩu phải có ít nhất 6 ký tự.") }).parse(req.body);
+  const user = await prisma.user.update({
+    where: { id: req.params.id },
+    data: {
+      passwordHash: await hashPassword(password),
+      currentSessionId: null,
+      refreshTokenHash: null
+    }
+  });
+  ok(res, { id: user.id, email: user.email, role: user.role, status: user.status });
+});
+
 export const lockUser = asyncHandler(async (req, res) => {
   const { locked } = z.object({ locked: z.boolean() }).parse(req.body);
   const user = await prisma.user.update({
@@ -170,9 +198,49 @@ export const listClassStudents = asyncHandler(async (req, res) => {
     orderBy: [{ studentCode: "asc" }, { fullName: "asc" }]
   }));
 });
-export const createClass = asyncHandler(async (req, res) => ok(res, await prisma.class.create({ data: classSchema.parse(req.body) }), 201));
-export const updateClass = asyncHandler(async (req, res) => ok(res, await prisma.class.update({ where: { id: req.params.id }, data: classSchema.partial().parse(req.body) })));
+const findClassByCode = (code: string) =>
+  prisma.class.findFirst({ where: { code: { equals: code, mode: "insensitive" } } });
+
+export const createClass = asyncHandler(async (req, res) => {
+  const input = classSchema.parse(req.body);
+  if (await findClassByCode(input.code)) {
+    throw new AppError(409, "DUPLICATE_CLASS_CODE", `Mã lớp ${input.code} đã tồn tại trong hệ thống.`);
+  }
+  ok(res, await prisma.class.create({ data: input }), 201);
+});
+export const updateClass = asyncHandler(async (req, res) => {
+  const input = classSchema.partial().parse(req.body);
+  if (input.code) {
+    const existingClass = await findClassByCode(input.code);
+    if (existingClass && existingClass.id !== req.params.id) {
+      throw new AppError(409, "DUPLICATE_CLASS_CODE", `Mã lớp ${input.code} đã tồn tại trong hệ thống.`);
+    }
+  }
+  ok(res, await prisma.class.update({ where: { id: req.params.id }, data: input }));
+});
 export const deleteClass = asyncHandler(async (req, res) => { await prisma.class.delete({ where: { id: req.params.id } }); ok(res, { message: "Đã xóa lớp." }); });
+
+export const removeClassStudent = asyncHandler(async (req, res) => {
+  const student = await prisma.user.findFirst({
+    where: { id: req.params.studentId, role: "STUDENT", classId: req.params.id }
+  });
+  if (!student) throw new AppError(404, "CLASS_STUDENT_NOT_FOUND", "Không tìm thấy sinh viên trong lớp này.");
+
+  await prisma.user.update({
+    where: { id: student.id },
+    data: { classId: null }
+  });
+  await prisma.auditLog.create({
+    data: {
+      actorId: req.user!.id,
+      action: "REMOVE_CLASS_STUDENT",
+      entity: "class",
+      entityId: req.params.id,
+      metadata: { studentId: student.id, studentCode: student.studentCode, email: student.email }
+    }
+  });
+  ok(res, { message: "Đã xoá sinh viên khỏi lớp." });
+});
 
 export const importClasses = asyncHandler(async (req, res) => {
   if (!req.file) throw new AppError(422, "FILE_REQUIRED", "Cần upload file Excel hoặc CSV.");
@@ -190,6 +258,7 @@ export const importClasses = asyncHandler(async (req, res) => {
 
   let successRows = 0;
   const errors: Array<{ row: number; message: string }> = [];
+  const seenCodes = new Set<string>();
 
   for (const [index, row] of rows.entries()) {
     const code = String(row["Mã lớp"] || row["Ma lop"] || row.Code || row.code || "").trim();
@@ -198,17 +267,19 @@ export const importClasses = asyncHandler(async (req, res) => {
 
     try {
       if (!code || !name || !facultyKey) throw new Error("Thiếu Mã lớp, Tên lớp hoặc Mã khoa.");
+      const normalizedCode = code.toLowerCase();
+      if (seenCodes.has(normalizedCode)) throw new Error(`Mã lớp ${code} bị trùng trong file import.`);
+      seenCodes.add(normalizedCode);
+
+      const existingClass = await findClassByCode(code);
+      if (existingClass) throw new Error(`Mã lớp ${code} đã tồn tại trong hệ thống.`);
 
       const faculty = await prisma.faculty.findFirst({
         where: { OR: [{ code: facultyKey }, { name: facultyKey }] }
       });
       if (!faculty) throw new Error(`Không tìm thấy khoa ${facultyKey}.`);
 
-      await prisma.class.upsert({
-        where: { code },
-        update: { name, facultyId: faculty.id },
-        create: { code, name, facultyId: faculty.id }
-      });
+      await prisma.class.create({ data: { code, name, facultyId: faculty.id } });
       successRows += 1;
     } catch (error) {
       errors.push({ row: index + 2, message: importErrorMessage(error) });
@@ -366,6 +437,8 @@ export const importLessons = asyncHandler(async (req, res) => {
 
   for (const [index, row] of rows.entries()) {
     const sectionKey = String(rowValue(row, ["Lớp học phần", "Lop hoc phan", "Mã lớp HP", "Ma lop HP", "Ma lop hoc phan", "Course section", "courseSection"]) ?? "").trim();
+    const subjectKey = String(rowValue(row, ["Môn học", "Mon hoc", "Tên môn học", "Ten mon hoc", "Mã học phần", "Ma hoc phan", "Subject", "subject"]) ?? "").trim();
+    const teacherKey = String(rowValue(row, ["Giảng viên", "Giang vien", "Tên giảng viên", "Ten giang vien", "Email giảng viên", "Email giang vien", "Teacher", "teacher"]) ?? "").trim();
     const lessonDate = cellToDateInput(rowValue(row, ["Ngày học", "Ngay hoc", "Ngày", "Ngay", "Date", "date"]));
     const startTime = cellToTimeInput(rowValue(row, ["Bắt đầu", "Bat dau", "Giờ bắt đầu", "Gio bat dau", "Start", "startTime"]));
     const endTime = cellToTimeInput(rowValue(row, ["Kết thúc", "Ket thuc", "Giờ kết thúc", "Gio ket thuc", "End", "endTime"]));
@@ -373,13 +446,22 @@ export const importLessons = asyncHandler(async (req, res) => {
     const topic = String(rowValue(row, ["Nội dung", "Noi dung", "Chủ đề", "Chu de", "Topic", "topic"]) ?? "").trim();
 
     try {
-      const section = sectionKey
-        ? await prisma.courseSection.findFirst({
-          where: { OR: [{ code: sectionKey }, { id: sectionKey }] },
-          include: { subject: true, teacher: { select: { fullName: true, email: true, teacherCode: true } } }
-        })
-        : selectedSection;
-      if (!section) throw new Error(`Không tìm thấy lớp học phần ${sectionKey}.`);
+      if (!sectionKey) throw new Error("Thiếu Lớp học phần.");
+      if (!sameLookup(sectionKey, selectedSection.code)) {
+        throw new Error(`Lớp học phần trong file (${sectionKey}) không khớp lớp đang import (${selectedSection.code}).`);
+      }
+      if (!subjectKey) throw new Error("Thiếu Môn học.");
+      if (!sameLookup(subjectKey, selectedSection.subject.name) && !sameLookup(subjectKey, selectedSection.subject.code)) {
+        throw new Error(`Môn học trong file (${subjectKey}) không khớp môn ${selectedSection.subject.name}.`);
+      }
+      if (!teacherKey) throw new Error("Thiếu Giảng viên.");
+      if (
+        !sameLookup(teacherKey, selectedSection.teacher.fullName) &&
+        !sameLookup(teacherKey, selectedSection.teacher.email) &&
+        !sameLookup(teacherKey, selectedSection.teacher.teacherCode)
+      ) {
+        throw new Error(`Giảng viên trong file (${teacherKey}) không khớp giảng viên ${selectedSection.teacher.fullName}.`);
+      }
       if (!lessonDate || !startTime || !endTime) throw new Error("Thiếu Ngày học, Bắt đầu hoặc Kết thúc.");
 
       const input = z.object({
@@ -393,7 +475,7 @@ export const importLessons = asyncHandler(async (req, res) => {
       await prisma.lesson.upsert({
         where: {
           courseSectionId_lessonDate_startTime: {
-            courseSectionId: section.id,
+            courseSectionId: selectedSection.id,
             lessonDate: input.lessonDate,
             startTime: input.startTime
           }
@@ -404,7 +486,7 @@ export const importLessons = asyncHandler(async (req, res) => {
           topic: topic || null
         },
         create: {
-          courseSectionId: section.id,
+          courseSectionId: selectedSection.id,
           lessonDate: input.lessonDate,
           startTime: input.startTime,
           endTime: input.endTime,
@@ -449,40 +531,37 @@ export const importStudents = asyncHandler(async (req, res) => {
   let successRows = 0;
   const errors: Array<{ row: number; message: string }> = [];
   const seenStudentCodes = new Map<string, number>();
+  const seenEmails = new Map<string, number>();
 
   for (const [index, row] of rows.entries()) {
     const studentCode = String(row.MSSV || "").trim();
     const fullName = String(row["Họ tên"] || row["Ho ten"] || "").trim();
     const className = String(row["Lớp"] || row.Lop || "").trim();
     const email = String(row.Email || "").trim().toLowerCase();
-    const duplicateRow = studentCode ? seenStudentCodes.get(studentCode) : undefined;
+    const normalizedStudentCode = normalizeLookup(studentCode);
+    const duplicateRow = normalizedStudentCode ? seenStudentCodes.get(normalizedStudentCode) : undefined;
+    const duplicateEmailRow = email ? seenEmails.get(email) : undefined;
 
     try {
       if (duplicateRow) throw new Error(`MSSV ${studentCode} bị trùng với dòng ${duplicateRow} trong file.`);
-      if (studentCode) seenStudentCodes.set(studentCode, index + 2);
+      if (duplicateEmailRow) throw new Error(`Email ${email} bị trùng với dòng ${duplicateEmailRow} trong file.`);
+      if (normalizedStudentCode) seenStudentCodes.set(normalizedStudentCode, index + 2);
+      if (email) seenEmails.set(email, index + 2);
       if (!studentCode || !fullName || !className || !email) throw new Error("Thiếu MSSV, Họ tên, Lớp hoặc Email.");
       const klass = await prisma.class.findFirst({ where: { OR: [{ name: className }, { code: className }] } });
       if (!klass) throw new Error(`Không tìm thấy lớp ${className}.`);
 
-      const existingUsers = await prisma.user.findMany({
-        where: { OR: [{ email }, { studentCode }] }
-      });
-      const userByEmail = existingUsers.find((user) => user.email === email);
-      const userByCode = existingUsers.find((user) => user.studentCode === studentCode);
+      const existingStudent = await findStudentByCode(studentCode);
+      const existingEmailUser = await findUserByEmail(email);
+      let student = existingStudent;
 
-      if (userByCode && userByEmail && userByCode.id !== userByEmail.id) {
-        throw new Error(`Email ${email} và MSSV ${studentCode} đang thuộc hai sinh viên khác nhau.`);
-      }
-      if (userByCode && userByCode.email !== email) {
-        throw new Error(`MSSV ${studentCode} đã tồn tại với email ${userByCode.email}.`);
-      }
-
-      const student = userByEmail
-        ? await prisma.user.update({
-          where: { id: userByEmail.id },
-          data: { fullName, studentCode, classId: klass.id, role: "STUDENT" }
-        })
-        : await prisma.user.create({
+      if (existingStudent) {
+        if (existingStudent.email.toLowerCase() !== email) {
+          throw new Error(`MSSV ${studentCode} đã tồn tại với email ${existingStudent.email}.`);
+        }
+      } else {
+        if (existingEmailUser) throw new Error(`Email ${email} đã tồn tại trong hệ thống.`);
+        student = await prisma.user.create({
           data: {
             email,
             fullName,
@@ -492,7 +571,9 @@ export const importStudents = asyncHandler(async (req, res) => {
             passwordHash: await hashPassword("123456")
           }
         });
+      }
 
+      if (!student) throw new Error(`Không thể xác định sinh viên ${studentCode}.`);
       await prisma.enrollment.upsert({
         where: { courseSectionId_studentId: { courseSectionId: req.params.sectionId, studentId: student.id } },
         update: {},
@@ -543,46 +624,32 @@ export const importClassStudents = asyncHandler(async (req, res) => {
     const studentCode = String(row.MSSV || row["Mã sinh viên"] || row["Ma sinh vien"] || "").trim();
     const fullName = String(row["Họ tên"] || row["Ho ten"] || row["Họ và tên"] || row["Ho va ten"] || row.Name || row.name || "").trim();
     const email = String(row.Email || row.email || "").trim().toLowerCase();
-    const duplicateCodeRow = studentCode ? seenStudentCodes.get(studentCode) : undefined;
+    const normalizedStudentCode = normalizeLookup(studentCode);
+    const duplicateCodeRow = normalizedStudentCode ? seenStudentCodes.get(normalizedStudentCode) : undefined;
     const duplicateEmailRow = email ? seenEmails.get(email) : undefined;
 
     try {
       if (duplicateCodeRow) throw new Error(`MSSV ${studentCode} bị trùng với dòng ${duplicateCodeRow} trong file.`);
       if (duplicateEmailRow) throw new Error(`Email ${email} bị trùng với dòng ${duplicateEmailRow} trong file.`);
-      if (studentCode) seenStudentCodes.set(studentCode, index + 2);
+      if (normalizedStudentCode) seenStudentCodes.set(normalizedStudentCode, index + 2);
       if (email) seenEmails.set(email, index + 2);
       if (!studentCode || !fullName || !email) throw new Error("Thiếu MSSV, Họ tên hoặc Email.");
 
-      const existingUsers = await prisma.user.findMany({
-        where: { OR: [{ email }, { studentCode }] }
+      const existingStudent = await findStudentByCode(studentCode);
+      if (existingStudent) throw new Error(`MSSV ${studentCode} đã tồn tại trong hệ thống.`);
+      const existingEmailUser = await findUserByEmail(email);
+      if (existingEmailUser) throw new Error(`Email ${email} đã tồn tại trong hệ thống.`);
+
+      await prisma.user.create({
+        data: {
+          email,
+          fullName,
+          studentCode,
+          classId: klass.id,
+          role: "STUDENT",
+          passwordHash: await hashPassword("123456")
+        }
       });
-      const userByEmail = existingUsers.find((user) => user.email === email);
-      const userByCode = existingUsers.find((user) => user.studentCode === studentCode);
-
-      if (userByCode && userByEmail && userByCode.id !== userByEmail.id) {
-        throw new Error(`Email ${email} và MSSV ${studentCode} đang thuộc hai sinh viên khác nhau.`);
-      }
-      if (userByCode && userByCode.email !== email) {
-        throw new Error(`MSSV ${studentCode} đã tồn tại với email ${userByCode.email}.`);
-      }
-
-      if (userByEmail) {
-        await prisma.user.update({
-          where: { id: userByEmail.id },
-          data: { fullName, studentCode, classId: klass.id, role: "STUDENT" }
-        });
-      } else {
-        await prisma.user.create({
-          data: {
-            email,
-            fullName,
-            studentCode,
-            classId: klass.id,
-            role: "STUDENT",
-            passwordHash: await hashPassword("123456")
-          }
-        });
-      }
       successRows += 1;
     } catch (error) {
       errors.push({ row: index + 2, message: importErrorMessage(error) });
@@ -635,49 +702,35 @@ export const importStudentsByClass = asyncHandler(async (req, res) => {
     const fullName = String(row["Họ tên"] || row["Ho ten"] || row["Họ và tên"] || row["Ho va ten"] || row.Name || row.name || "").trim();
     const className = String(row["Lớp học"] || row["Lop hoc"] || row["Lớp"] || row.Lop || row.Class || row.class || "").trim();
     const email = String(row.Email || row.email || "").trim().toLowerCase();
-    const duplicateCodeRow = studentCode ? seenStudentCodes.get(studentCode) : undefined;
+    const normalizedStudentCode = normalizeLookup(studentCode);
+    const duplicateCodeRow = normalizedStudentCode ? seenStudentCodes.get(normalizedStudentCode) : undefined;
     const duplicateEmailRow = email ? seenEmails.get(email) : undefined;
 
     try {
       if (duplicateCodeRow) throw new Error(`MSSV ${studentCode} bị trùng với dòng ${duplicateCodeRow} trong file.`);
       if (duplicateEmailRow) throw new Error(`Email ${email} bị trùng với dòng ${duplicateEmailRow} trong file.`);
-      if (studentCode) seenStudentCodes.set(studentCode, index + 2);
+      if (normalizedStudentCode) seenStudentCodes.set(normalizedStudentCode, index + 2);
       if (email) seenEmails.set(email, index + 2);
       if (!studentCode || !fullName || !className || !email) throw new Error("Thiếu Họ tên, Mã số sinh viên, Lớp học hoặc Email.");
 
       const klass = await prisma.class.findFirst({ where: { OR: [{ code: className }, { name: className }] } });
       if (!klass) throw new Error(`Không tìm thấy lớp ${className}.`);
 
-      const existingUsers = await prisma.user.findMany({
-        where: { OR: [{ email }, { studentCode }] }
+      const existingStudent = await findStudentByCode(studentCode);
+      if (existingStudent) throw new Error(`MSSV ${studentCode} đã tồn tại trong hệ thống.`);
+      const existingEmailUser = await findUserByEmail(email);
+      if (existingEmailUser) throw new Error(`Email ${email} đã tồn tại trong hệ thống.`);
+
+      await prisma.user.create({
+        data: {
+          email,
+          fullName,
+          studentCode,
+          classId: klass.id,
+          role: "STUDENT",
+          passwordHash: await hashPassword("123456")
+        }
       });
-      const userByEmail = existingUsers.find((user) => user.email === email);
-      const userByCode = existingUsers.find((user) => user.studentCode === studentCode);
-
-      if (userByCode && userByEmail && userByCode.id !== userByEmail.id) {
-        throw new Error(`Email ${email} và MSSV ${studentCode} đang thuộc hai sinh viên khác nhau.`);
-      }
-      if (userByCode && userByCode.email !== email) {
-        throw new Error(`MSSV ${studentCode} đã tồn tại với email ${userByCode.email}.`);
-      }
-
-      if (userByEmail) {
-        await prisma.user.update({
-          where: { id: userByEmail.id },
-          data: { fullName, studentCode, classId: klass.id, role: "STUDENT" }
-        });
-      } else {
-        await prisma.user.create({
-          data: {
-            email,
-            fullName,
-            studentCode,
-            classId: klass.id,
-            role: "STUDENT",
-            passwordHash: await hashPassword("123456")
-          }
-        });
-      }
       successRows += 1;
     } catch (error) {
       errors.push({ row: index + 2, message: importErrorMessage(error) });
